@@ -12,3 +12,4 @@ data/
 test-results/
 playwright-report/
 .local/
+frontend/*.tsbuildinfo

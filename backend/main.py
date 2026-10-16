@@ -109,7 +109,7 @@ async def run_investigation(identifier, d, revision):
     d['recommended_id'] = None
     revision = persist(identifier, d, revision)
     try:
-        async with asyncio.timeout(90):
+        async with asyncio.timeout(180):
             result = await workflow.ainvoke({'case': d})
         d = result['case']
     except Exception:

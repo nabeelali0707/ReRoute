@@ -1,0 +1,36 @@
+services:
+  app:
+    build: .
+    ports:
+      - "127.0.0.1:8000:8000"
+    environment:
+      PORT: "8000"
+      DATABASE_URL: postgresql+psycopg://reroute:${POSTGRES_PASSWORD:-reroute-local-only}@db:5432/reroute
+      AGENT_MODE: ${AGENT_MODE:-demo}
+      TOOL_MODE: ${TOOL_MODE:-demo}
+      APP_TOKEN: ${APP_TOKEN:-}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      ANTHROPIC_MODEL: ${ANTHROPIC_MODEL:-}
+      FASTN_MCP_URL: ${FASTN_MCP_URL:-}
+      FASTN_MCP_TOKEN: ${FASTN_MCP_TOKEN:-}
+      FASTN_SNAPSHOT_TOOL: ${FASTN_SNAPSHOT_TOOL:-reroute_get_snapshot}
+      FASTN_CREATE_TOOL: ${FASTN_CREATE_TOOL:-reroute_create_request}
+      FASTN_LOOKUP_TOOL: ${FASTN_LOOKUP_TOOL:-reroute_get_request}
+    depends_on:
+      db:
+        condition: service_healthy
+  db:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: reroute
+      POSTGRES_DB: reroute
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-reroute-local-only}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U reroute -d reroute"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+volumes:
+  postgres_data:

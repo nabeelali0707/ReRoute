@@ -1,5 +1,5 @@
 from typing import Literal
-from pydantic import BaseModel, Field, ConfigDict
+from pydantic import BaseModel, Field, ConfigDict, model_validator
 
 
 class StrictModel(BaseModel):
@@ -50,6 +50,14 @@ class Supplier(StrictModel):
 class Snapshot(StrictModel):
     source: str
     suppliers: list[Supplier] = Field(max_length=50)
+
+    @model_validator(mode='after')
+    def unique_suppliers(self):
+        if len({s.id for s in self.suppliers}) != len(self.suppliers):
+            raise ValueError('Duplicate supplier IDs are not allowed.')
+        if any(not s.evidence_id.strip() or not s.evidence.strip() for s in self.suppliers):
+            raise ValueError('Every supplier requires a source reference and evidence.')
+        return self
 
 
 class PurchaseRequest(StrictModel):

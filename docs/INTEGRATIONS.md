@@ -1,6 +1,6 @@
 # Integration contract
 
-Default `AGENT_MODE=demo` uses a deterministic LangGraph workflow, not autonomous LLM reasoning. `AGENT_MODE=anthropic` enables a Claude planner that selects from independently validated plans and considers reviewer notes. Investigation and sourcing remain deterministic in this first release. Set an available `ANTHROPIC_MODEL` explicitly; no model ID or free access is assumed.
+Default `AGENT_MODE=demo` uses a deterministic LangGraph workflow, not autonomous LLM reasoning. `AGENT_MODE=anthropic` enables a bounded Claude sourcing agent that chooses which supplier quotes to inspect using a read-only evidence tool, followed by a Claude planner that selects from independently validated plans and considers reviewer notes. The investigator's initial snapshot retrieval and all arithmetic/constraint validation remain deterministic. Quote inspection reads evidence already retrieved from the configured adapter; it does not independently contact suppliers. Set an available `ANTHROPIC_MODEL` explicitly; no model ID or free access is assumed.
 
 Default `TOOL_MODE=demo` reads synthetic fixtures and writes a persistent local draft-request ledger. `TOOL_MODE=fastn` uses the official MCP Python SDK over Streamable HTTP. It NEVER falls back to demo if a connector fails. Both connected modes require APP_TOKEN (24+ characters). This shared operator token is suitable for a controlled demonstration, not production identity/RBAC.
 
