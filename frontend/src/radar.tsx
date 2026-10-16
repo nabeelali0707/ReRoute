@@ -1,6 +1,7 @@
-import React, { useEffect, useRef, useState } from 'react';
-import { AlertTriangle, ArrowRight, Bot, CheckCircle2, CircleDot, FileText, LoaderCircle, MessageSquareText, Printer, Radar as RadarIcon, Send, ShieldAlert, Sparkles, X } from 'lucide-react';
+import React, { useEffect, useState } from 'react';
+import { AlertTriangle, ArrowRight, CheckCircle2, CircleDot, FileText, LoaderCircle, Printer, Radar as RadarIcon, ShieldAlert, Sparkles, X } from 'lucide-react';
 import { api, money } from './lib';
+import { CountryMap } from './views';
 import type { Config, Radar, RadarAnalysis, RadarOrder, RecoveryCase, RiskLevel } from './types';
 
 // Reserved status colours (dataviz reference palette); always shown with a text label and icon.
@@ -60,6 +61,11 @@ export function RadarView({ config, onOpenCase, onError }: { config?: Config; on
       </section>
     </div>
 
+    <section className="panel map-panel">
+      <div className="panel-heading"><h3><CircleDot size={17}/>Country risk map</h3><span className="chart-note">Supplier origins coloured by current signal severity</span></div>
+      <CountryMap radar={radar}/>
+    </section>
+
     <section className="panel options-panel">
       <div className="table-caption"><p>Every open order, scored by days late ÷ days until needed, plus current country signals.</p><span>{radar.source}</span></div>
       <div className="table-scroll"><table aria-label="Order risk table">
@@ -104,45 +110,6 @@ function RiskMatrix({ orders }: { orders: RadarOrder[] }) {
     </svg>
     {hover && <div className="chart-tooltip" style={{ left: `${hover.x / W * 100}%`, top: `${hover.y / H * 100}%` }}><strong>{hover.o.id} · {hover.o.item}</strong><span>{hover.o.origin} · {hover.o.level} risk</span><span>{hover.o.variance_days > 0 ? `${hover.o.variance_days} days late` : 'On schedule'} · {hover.o.schedule_risk_pct}%</span><span>Signals: {hover.o.signal_ids.join(', ') || 'none'}</span></div>}
   </div>;
-}
-
-type Message = { role: 'user' | 'assistant'; text: string; engine?: string };
-
-// Models often answer in light Markdown; render **bold** safely as text, never as HTML.
-function Rich({ text }: { text: string }) {
-  return <>{text.split(/(\*\*[^*]+\*\*)/g).map((part, i) => part.startsWith('**') && part.endsWith('**') ? <strong key={i}>{part.slice(2, -2)}</strong> : <React.Fragment key={i}>{part}</React.Fragment>)}</>;
-}
-
-export function AskPanel({ activeCase, onClose }: { activeCase?: RecoveryCase; onClose: () => void }) {
-  const [messages, setMessages] = useState<Message[]>([]);
-  const [question, setQuestion] = useState('');
-  const [busy, setBusy] = useState(false);
-  const end = useRef<HTMLDivElement>(null);
-  useEffect(() => { end.current?.scrollIntoView({ behavior: 'smooth' }); }, [messages, busy]);
-  const suggestions = activeCase ? [`Why was this plan recommended for ${activeCase.id}?`, 'Which supplier is the safest choice and why?', 'Which other orders are at high risk?'] : ['Which orders are at high risk and why?', 'What should I act on first today?', 'Which countries have active risk signals?'];
-
-  async function send(text: string) {
-    const q = text.trim(); if (!q || busy) return;
-    setMessages(m => [...m, { role: 'user', text: q }]); setQuestion(''); setBusy(true);
-    try { const r = await api<{ answer: string; engine: string }>('/ask', { question: q, case_id: activeCase?.id }); setMessages(m => [...m, { role: 'assistant', text: r.answer, engine: r.engine }]); }
-    catch (e) { setMessages(m => [...m, { role: 'assistant', text: (e as Error).message, engine: 'Error' }]); }
-    finally { setBusy(false); }
-  }
-
-  return <aside className="ask-panel" role="dialog" aria-modal="false" aria-labelledby="ask-title">
-    <div className="panel-heading"><h3 id="ask-title"><MessageSquareText size={17}/>Ask ReRoute</h3><button className="icon-button" aria-label="Close Ask ReRoute" onClick={onClose}><X size={18}/></button></div>
-    <p className="ask-context">{activeCase ? <>Context: order book, risk signals and <strong>{activeCase.id}</strong>.</> : 'Context: order book and risk signals.'} Read-only: the AI can explain, never approve or buy.</p>
-    <div className="ask-messages">
-      {!messages.length && <div className="ask-suggestions">{suggestions.map(s => <button key={s} className="chip-button" onClick={() => void send(s)}>{s}</button>)}</div>}
-      {messages.map((m, i) => <div key={i} className={`ask-message ${m.role}`}>{m.role === 'assistant' && <Bot size={15}/>}<div><p>{m.role === 'assistant' ? <Rich text={m.text}/> : m.text}</p>{m.engine && <small>{m.engine}</small>}</div></div>)}
-      {busy && <div className="ask-message assistant"><Bot size={15}/><div><p><LoaderCircle size={14} className="spin"/> Thinking…</p></div></div>}
-      <div ref={end}/>
-    </div>
-    <form className="ask-form" onSubmit={e => { e.preventDefault(); void send(question); }}>
-      <input aria-label="Question for ReRoute" placeholder="Ask about orders, risks or this case…" value={question} maxLength={500} onChange={e => setQuestion(e.target.value)}/>
-      <button className="primary" disabled={busy || question.trim().length < 2} aria-label="Send question"><Send size={15}/></button>
-    </form>
-  </aside>;
 }
 
 export function ReportModal({ data, onClose }: { data: RecoveryCase; onClose: () => void }) {
