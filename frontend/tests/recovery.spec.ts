@@ -25,6 +25,8 @@ test('operator changes constraints, approves and verifies a request', async ({ p
   await expect(page.getByText('QT-1042', { exact: true })).toBeVisible();
   await page.getByRole('button', { name: 'Connections', exact: true }).click();
   await expect(page.getByText('Local demo adapter', { exact: true })).toBeVisible();
+  await page.getByRole('button', { name: 'Run connection check' }).click();
+  await expect(page.getByRole('list', { name: 'Connection check results' }).getByText('Demo mode')).toBeVisible();
   expect(errors).toEqual([]);
 });
 

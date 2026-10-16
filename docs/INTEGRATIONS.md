@@ -4,9 +4,15 @@ ReRoute has three independent integration switches. Each defaults to an offline 
 
 | Switch | Demo default | Live mode |
 |---|---|---|
-| `AGENT_MODE` | Deterministic LangGraph planner | `anthropic`: Claude sourcing agent + Claude planner |
+| `AGENT_MODE` | Deterministic LangGraph planner | `groq` (free key) or `anthropic`: LLM sourcing agent + planner |
 | `DISPATCH_MODE` | `off` | `fastn`: run a connected-app action through fastn after a request is verified |
 | `TOOL_MODE` | Synthetic quotes + local request ledger | `fastn`: custom supplier/ledger tools you build |
+
+## Groq agents (`AGENT_MODE=groq`)
+
+Requires `GROQ_API_KEY` (free at [console.groq.com/keys](https://console.groq.com/keys), the provider the event guide recommends). `GROQ_MODEL` defaults to `openai/gpt-oss-120b`; any Groq model with tool use works. `GROQ_BASE_URL` can point at any other OpenAI-compatible endpoint.
+
+The behaviour and safeguards match the Claude path below: a read-only `inspect_supplier_quote` tool with an enum of this case's suppliers, at most three tool rounds, and a planner whose JSON answer is rejected unless it names a plan that already passed deterministic validation. Rate-limit and server errors are retried once; any other failure marks the investigation `error` with nothing executed.
 
 ## Claude agents (`AGENT_MODE=anthropic`)
 

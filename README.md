@@ -2,7 +2,9 @@
 
 **When supply breaks, find the next move.**
 
-A recovery workspace for investigating procurement disruptions, comparing supplier alternatives, incorporating human constraints, and creating a verified draft purchase request. Built with React, TypeScript, FastAPI, LangGraph and SQLAlchemy, with Claude agents for evidence review and planning, and fastn MCP for dispatching approved recoveries to connected apps.
+A recovery workspace for investigating procurement disruptions, comparing supplier alternatives, incorporating human constraints, and creating a verified draft purchase request. Built with React, TypeScript, FastAPI, LangGraph and SQLAlchemy, with LLM agents (Groq or Claude) for evidence review and planning, and fastn MCP for dispatching approved recoveries to connected apps.
+
+**Hackathon team: start with [docs/HACKATHON_CHECKLIST.md](docs/HACKATHON_CHECKLIST.md)**: requirement alignment plus your remaining steps in order.
 
 ## What works
 
@@ -24,6 +26,8 @@ A recovery workspace for investigating procurement disruptions, comparing suppli
 ## Run locally
 
 Requirements: Python 3.12+, Node.js 22+. Run from the repository root.
+
+On Windows, `powershell -ExecutionPolicy Bypass -File scripts\setup.ps1` does all of the steps below; then run `.\.venv\Scripts\python.exe -m backend.serve`.
 
 ```powershell
 python -m venv .venv
@@ -55,7 +59,8 @@ Shorter path: tick **Require certified compatibility** instead of rejecting Atla
 
 Read [integration contracts](docs/INTEGRATIONS.md). Set values in `.env` or platform secrets, never in source code:
 
-- `AGENT_MODE=anthropic` and `ANTHROPIC_API_KEY` for the Claude agents (`ANTHROPIC_MODEL` defaults to `claude-opus-5-5`).
+- `AGENT_MODE=groq` and `GROQ_API_KEY` (free at console.groq.com/keys) for the LLM agents, or `AGENT_MODE=anthropic` and `ANTHROPIC_API_KEY` for Claude.
+- **Connections → Run connection check** in the app makes one real call to each configured provider.
 - `DISPATCH_MODE=fastn`, `FASTN_API_KEY`, `FASTN_PROJECT_ID`, `FASTN_DISPATCH_ACTION_ID` and `FASTN_DISPATCH_PARAMS` to notify a connected app after verification. Find the action with `python -m backend.fastn_discover "send a Slack message to a channel"`, then test it with `python -m backend.fastn_discover --test`.
 - `TOOL_MODE=fastn` only if you have built the custom supplier/ledger tools described in the integration doc.
 - `APP_TOKEN`: a strong random operator token of at least 24 characters for either connected mode. Enter it in the browser workspace form; it is kept in session storage.

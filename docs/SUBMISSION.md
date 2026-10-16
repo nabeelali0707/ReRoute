@@ -27,7 +27,7 @@ Material for the one-PDF submission (handbook pages 9–11), plus demo and video
 **What we built with:**
 
 - Custom code: React + TypeScript frontend; Python FastAPI backend; LangGraph workflow (investigator → sourcing agent → recovery planner).
-- AI: Anthropic Claude (`claude-opus-5-5`). A sourcing agent inspects supplier quotes through a read-only tool and flags missing evidence; a planner chooses among plans that already passed deterministic checks, using structured output. Budget, quantity, deadline and certification rules run in code, so the model cannot approve or pick an infeasible plan.
+- AI: [TEAM: keep the one you deployed] Groq (`openai/gpt-oss-120b`) or Anthropic Claude (`claude-opus-5-5`). A sourcing agent inspects supplier quotes through a read-only tool and flags missing evidence; a planner chooses among plans that already passed deterministic checks, using structured output. Budget, quantity, deadline and certification rules run in code, so the model cannot approve or pick an infeasible plan.
 - MCP: fastn MCP gateway. After a purchase request is created and read back, ReRoute calls fastn's `execute_tool` to dispatch the approved recovery to the team's connected app (e.g. Slack). [TEAM: name the connector you configured.]
 - Data: SQLite/PostgreSQL via SQLAlchemy. Supplier quotes are clearly labelled synthetic demo data; the workflow, approvals, request ledger and dispatch are real.
 - Hosting: Docker on Alternate Clouds.

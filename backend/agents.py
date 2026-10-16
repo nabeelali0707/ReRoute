@@ -88,3 +88,9 @@ async def choose_plan(data, feasible):
     if output.get('recommended_id') not in [p['id'] for p in feasible] or not isinstance(output.get('summary'), str):
         raise ValueError('Planner output failed validation')
     return output['recommended_id'], output['summary'][:600]
+
+
+async def ping():
+    client = AsyncAnthropic(timeout=60, max_retries=1)
+    response = await ask(client, messages=[{'role': 'user', 'content': 'Reply with the single word OK.'}])
+    return f"{model()} replied: {''.join(b.text for b in response.content if b.type == 'text').strip()[:40]}"

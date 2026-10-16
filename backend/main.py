@@ -16,7 +16,7 @@ from .store import Base, engine, Session, Case, read, save, all_cases, event, no
 from .workflow import workflow, assess
 from .adapters import get_tools
 from . import fastn
-from .agents import model as agent_model
+from .workflow import provider
 
 
 def create_case(body):
@@ -30,13 +30,15 @@ def create_case(body):
 
 @asynccontextmanager
 async def lifespan(app):
-    if os.getenv('AGENT_MODE', 'demo') not in ('demo', 'anthropic') or os.getenv('TOOL_MODE', 'demo') not in ('demo', 'fastn'):
+    if os.getenv('AGENT_MODE', 'demo') not in ('demo', 'anthropic', 'groq') or os.getenv('TOOL_MODE', 'demo') not in ('demo', 'fastn'):
         raise RuntimeError('Invalid provider mode.')
     if os.getenv('DISPATCH_MODE', 'off') not in ('off', 'fastn'):
         raise RuntimeError('DISPATCH_MODE must be off or fastn.')
     if os.getenv('AGENT_MODE', 'demo') != 'demo' or os.getenv('TOOL_MODE', 'demo') != 'demo' or fastn.dispatch_enabled():
         if len(os.getenv('APP_TOKEN', '')) < 24:
             raise RuntimeError('Set a strong APP_TOKEN (at least 24 characters) for connected modes.')
+    if os.getenv('AGENT_MODE') == 'groq' and not os.getenv('GROQ_API_KEY'):
+        raise RuntimeError('Groq mode requires GROQ_API_KEY (free at console.groq.com/keys).')
     if os.getenv('AGENT_MODE') == 'anthropic' and not os.getenv('ANTHROPIC_API_KEY'):
         raise RuntimeError('Anthropic mode requires ANTHROPIC_API_KEY.')
     if fastn.dispatch_enabled() and not all(os.getenv(k) for k in ('FASTN_API_KEY', 'FASTN_PROJECT_ID', 'FASTN_DISPATCH_ACTION_ID')):
@@ -100,6 +102,32 @@ def persist(identifier, data, revision):
         raise HTTPException(409, str(exc))
 
 
+@app.post('/api/diagnostics', dependencies=[Depends(authorize)])
+async def diagnostics():
+    """Make one small real call to each configured live provider; never reports success without a response."""
+    async def check(name, run):
+        try:
+            async with asyncio.timeout(60):
+                return {'name': name, 'ok': True, 'detail': await run()}
+        except Exception as exc:
+            detail = str(exc)[:240] if isinstance(exc, (fastn.FastnError, ValueError)) else f'{type(exc).__name__}: could not reach the provider.'
+            return {'name': name, 'ok': False, 'detail': detail}
+    results = []
+    if provider():
+        results.append(await check('Reasoning model', provider().ping))
+    if fastn.dispatch_enabled():
+        async def fastn_check():
+            found = await fastn.find_tools('send a message or create a record for a procurement team')
+            tools = found.get('tools', []) if isinstance(found, dict) else found
+            configured = os.getenv('FASTN_DISPATCH_ACTION_ID')
+            listed = any(isinstance(t, dict) and configured in json.dumps(t) for t in tools)
+            return f"fastn gateway reachable · {len(tools)} matching action(s)" + (' · configured action found' if listed else ' · configured action not in this search (it may still be valid)')
+        results.append(await check('fastn MCP gateway', fastn_check))
+    if not results:
+        results.append({'name': 'Demo mode', 'ok': True, 'detail': 'No live providers configured; nothing external to check.'})
+    return results
+
+
 @app.get('/api/health')
 def health():
     return {'status': 'ok'}
@@ -107,7 +135,7 @@ def health():
 
 @app.get('/api/config')
 def config():
-    return {'agent_mode': os.getenv('AGENT_MODE', 'demo'), 'tool_mode': os.getenv('TOOL_MODE', 'demo'), 'auth_required': bool(os.getenv('APP_TOKEN')), 'model': agent_model() if os.getenv('AGENT_MODE') == 'anthropic' else None,
+    return {'agent_mode': os.getenv('AGENT_MODE', 'demo'), 'tool_mode': os.getenv('TOOL_MODE', 'demo'), 'auth_required': bool(os.getenv('APP_TOKEN')), 'model': provider().model() if provider() else None,
             'dispatch_mode': os.getenv('DISPATCH_MODE', 'off'), 'dispatch_label': fastn.dispatch_label() if fastn.dispatch_enabled() else None}
 
 

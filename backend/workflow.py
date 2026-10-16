@@ -25,6 +25,18 @@ def assess(s, data):
     return dict(id=s['id'], supplier=s['name'], location=s['location'], total=total, lead_days=s['lead_days'], certified=s['certified'], stock=s['stock'], evidence_id=s['evidence_id'], feasible=not blockers, blockers=blockers, savings=c['budget'] - total)
 
 
+def provider():
+    """The LLM module for the configured AGENT_MODE, or None for the deterministic demo."""
+    mode = os.getenv('AGENT_MODE', 'demo')
+    if mode == 'anthropic':
+        from . import agents
+        return agents
+    if mode == 'groq':
+        from . import agents_groq
+        return agents_groq
+    return None
+
+
 class WorkflowState(TypedDict):
     case: dict
 
@@ -46,9 +58,8 @@ async def source(state):
     valid = sum(p['feasible'] for p in d['plans'])
     event(d, 'Sourcing agent', 'Constraints verified', f"{valid} feasible options; {len(d['plans']) - valid} blocked. Quantity, budget, lead time and certification checked in code.")
     d['sourcing_review'] = ''
-    if os.getenv('AGENT_MODE', 'demo') == 'anthropic' and d['suppliers']:
-        from .agents import review_evidence
-        d['sourcing_review'] = await review_evidence(d)
+    if provider() and d['suppliers']:
+        d['sourcing_review'] = await provider().review_evidence(d)
     return {'case': d}
 
 
@@ -60,9 +71,8 @@ async def plan(state):
     if feasible:
         p = feasible[0]
         d['summary'] = f"{p['supplier']} meets the current constraints at PKR {p['total']:,}, with delivery in {p['lead_days']} day(s). Review the evidence and approve a plan before creating a purchase request."
-    if os.getenv('AGENT_MODE', 'demo') == 'anthropic' and feasible:
-        from .agents import choose_plan
-        d['recommended_id'], d['summary'] = await choose_plan(d, feasible)
+    if provider() and feasible:
+        d['recommended_id'], d['summary'] = await provider().choose_plan(d, feasible)
     d['status'] = 'review' if feasible else 'blocked'
     event(d, 'Recovery planner', 'Recovery options ready' if feasible else 'Human input needed', d['summary'], 'success' if feasible else 'warning')
     return {'case': d}

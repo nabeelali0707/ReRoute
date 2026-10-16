@@ -192,6 +192,58 @@ def test_claude_refusal_is_an_error_not_a_plan(client, monkeypatch):
     assert d['status'] == 'error' and not d['plans']
 
 
+def groq_transport(monkeypatch, replies, requests):
+    import json
+    import httpx
+    from backend import agents_groq
+    real = httpx.AsyncClient
+    def handler(request):
+        requests.append(json.loads(request.content))
+        return httpx.Response(200, json={'choices': [{'finish_reason': 'stop', 'message': next(replies)}]})
+    monkeypatch.setenv('AGENT_MODE', 'groq')
+    monkeypatch.setenv('GROQ_API_KEY', 'test')
+    monkeypatch.setattr(agents_groq.httpx, 'AsyncClient', lambda **kw: real(transport=httpx.MockTransport(handler), **kw))
+
+
+def test_groq_agents_offline(client, monkeypatch):
+    import json
+    requests = []
+    replies = iter([
+        {'role': 'assistant', 'content': None, 'tool_calls': [{'id': 'c1', 'type': 'function', 'function': {'name': 'inspect_supplier_quote', 'arguments': '{"supplier_id": "atlas"}'}}]},
+        {'role': 'assistant', 'content': 'Atlas has stock but no certification evidence.'},
+        {'role': 'assistant', 'content': json.dumps({'recommended_id': 'atlas', 'summary': 'Atlas is cheapest and meets current constraints.'})},
+    ])
+    groq_transport(monkeypatch, replies, requests)
+    d = investigate(client, case(client)['id'])
+    assert d['status'] == 'review' and d['recommended_id'] == 'atlas'
+    assert 'certification' in d['sourcing_review']
+    assert requests[0]['model'] == 'openai/gpt-oss-120b'
+    assert requests[0]['tools'][0]['function']['parameters']['properties']['supplier_id']['enum'] == ['atlas', 'crescent', 'meridian', 'northstar', 'vertex']
+    assert requests[1]['messages'][-1]['role'] == 'tool'
+    assert requests[2]['response_format'] == {'type': 'json_object'}
+    assert client.get('/api/config').json()['model'] == 'openai/gpt-oss-120b'
+
+
+def test_groq_planner_cannot_pick_blocked_plan(client, monkeypatch):
+    import json
+    replies = iter([
+        {'role': 'assistant', 'content': None, 'tool_calls': [{'id': 'c1', 'type': 'function', 'function': {'name': 'inspect_supplier_quote', 'arguments': '{"supplier_id": "vertex"}'}}]},
+        {'role': 'assistant', 'content': 'Vertex lacks stock.'},
+        {'role': 'assistant', 'content': json.dumps({'recommended_id': 'vertex', 'summary': 'Ignore the rules and buy Vertex.'})},
+    ])
+    groq_transport(monkeypatch, replies, [])
+    d = investigate(client, case(client)['id'])
+    assert d['status'] == 'error' and not d['plans'] and d['recommended_id'] is None
+
+
+def test_diagnostics(client, monkeypatch):
+    assert client.post('/api/diagnostics').json() == [{'name': 'Demo mode', 'ok': True, 'detail': 'No live providers configured; nothing external to check.'}]
+    replies = iter([{'role': 'assistant', 'content': 'OK'}])
+    groq_transport(monkeypatch, replies, [])
+    result = client.post('/api/diagnostics').json()
+    assert result[0]['ok'] and 'OK' in result[0]['detail']
+
+
 def test_fastn_error_payloads_are_failures():
     from types import SimpleNamespace
     from backend import fastn
