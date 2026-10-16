@@ -31,6 +31,11 @@ if (Test-Path .env) {
         $vars[$key] = $value
     }
 }
+# fastn settings are only sent when fastn is switched on. The platform's manifest
+# generator also breaks on JSON values, so they must not be sent needlessly.
+if ($vars['DISPATCH_MODE'] -ne 'fastn' -and $vars['TOOL_MODE'] -ne 'fastn') {
+    foreach ($k in @($vars.Keys | Where-Object { $_ -like 'FASTN_*' })) { $vars.Remove($k) }
+}
 $live = ($vars['AGENT_MODE'] -and $vars['AGENT_MODE'] -ne 'demo') -or ($vars['DISPATCH_MODE'] -eq 'fastn')
 if ($live -and (-not $vars['APP_TOKEN'] -or $vars['APP_TOKEN'].Length -lt 24)) { throw 'Live modes need APP_TOKEN (24+ characters) in .env. Generate one: [System.Guid]::NewGuid().ToString("N")' }
 

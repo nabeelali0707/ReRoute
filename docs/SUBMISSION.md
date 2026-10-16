@@ -34,7 +34,7 @@ Material for the one-PDF submission (handbook pages 9–11), plus demo and video
 
 ## 3. Required links [TEAM]
 
-- Live Alternate Clouds URL:
+- Live Alternate Clouds URL: https://reroute-app.alternatefutures.ai
 - GitHub repository: https://github.com/nabeelali0707/ReRoute
 - Demo video (unlisted YouTube or Drive, anyone with link):
 - LinkedIn post and teammate reshare:
@@ -57,6 +57,8 @@ Material for the one-PDF submission (handbook pages 9–11), plus demo and video
 ---
 
 ## Six-minute finalist demo
+
+With the live AI, the first recommendation can be Atlas or Northstar; it weighs certification differently on each run. Whichever it recommends, **reject that supplier** with a reason. The re-plan, approval, withdrawal and automatic re-plan steps work the same way.
 
 | Time | Show | Say (in your own words) |
 |---|---|---|

@@ -6,7 +6,7 @@ Every requirement from the Participant Handbook and the Deployment & Troubleshoo
 
 | Requirement | Status | Where |
 |---|---|---|
-| Deploy on Alternate Clouds (local-only or elsewhere disqualifies) | Ready; **Team** deploys | [DEPLOY.md](DEPLOY.md), `scripts/deploy.ps1` |
+| Deploy on Alternate Clouds (local-only or elsewhere disqualifies) | Done: service `reroute`, project `agentika`, image `v2` | [DEPLOY.md](DEPLOY.md), `scripts/deploy.ps1` |
 | LinkedIn post written by the team (AI-written disqualifies) | **Team** (deliberately not drafted) | Handbook p.7 structure |
 | Communicate in English | Done for the product; **Team** for the event | UI, docs and pitch are English |
 | Credit third-party work | Done | [THIRD_PARTY.md](../THIRD_PARTY.md) |
@@ -30,7 +30,7 @@ Every requirement from the Participant Handbook and the Deployment & Troubleshoo
 |---|---|
 | 1. Team details | **Team**: placeholders in [SUBMISSION.md](SUBMISSION.md) |
 | 2. Pitch, problem, where the human comes in, stack | Drafted in [SUBMISSION.md](SUBMISSION.md); confirm the model and connector you used |
-| 3. Live Alternate Clouds URL | **Team** after deploying |
+| 3. Live Alternate Clouds URL | Done: https://reroute-app.alternatefutures.ai (verified with `check-live.ps1`) |
 | 3. GitHub repository | Done: https://github.com/nabeelali0707/ReRoute (public) |
 | 3. 2–3 minute demo video | **Team**: script in [SUBMISSION.md](SUBMISSION.md) |
 | 3. LinkedIn post + teammate reshare | **Team** |
