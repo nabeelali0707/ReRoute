@@ -7,7 +7,9 @@ _tmp = tempfile.TemporaryDirectory()
 os.environ['DATABASE_URL'] = 'sqlite:///' + str(Path(_tmp.name) / 'tests.db')
 os.environ['AGENT_MODE'] = 'demo'
 os.environ['TOOL_MODE'] = 'demo'
-os.environ.pop('APP_TOKEN', None)
+# Empty (not unset) so a developer's local .env cannot leak in through load_dotenv.
+os.environ['APP_TOKEN'] = ''
+os.environ['DISPATCH_MODE'] = 'off'
 
 import pytest
 from fastapi.testclient import TestClient
@@ -234,6 +236,19 @@ def test_groq_planner_cannot_pick_blocked_plan(client, monkeypatch):
     groq_transport(monkeypatch, replies, [])
     d = investigate(client, case(client)['id'])
     assert d['status'] == 'error' and not d['plans'] and d['recommended_id'] is None
+
+
+def test_groq_waits_out_rate_limit(monkeypatch):
+    import asyncio
+    import httpx
+    from backend import agents_groq
+    assert agents_groq.retry_delay(httpx.Response(429, headers={'x-ratelimit-reset-tokens': '1m2.5s'})) == 62.5
+    assert agents_groq.retry_delay(httpx.Response(429, headers={'x-ratelimit-reset-tokens': '697ms'})) == pytest.approx(0.697)
+    responses = iter([httpx.Response(429, headers={'retry-after': '0'}), httpx.Response(200, json={'choices': [{'finish_reason': 'stop', 'message': {'role': 'assistant', 'content': 'OK'}}]})])
+    real = httpx.AsyncClient
+    monkeypatch.setenv('GROQ_API_KEY', 'test')
+    monkeypatch.setattr(agents_groq.httpx, 'AsyncClient', lambda **kw: real(transport=httpx.MockTransport(lambda r: next(responses)), **kw))
+    assert asyncio.run(agents_groq.chat(messages=[]))['content'] == 'OK'
 
 
 def test_diagnostics(client, monkeypatch):

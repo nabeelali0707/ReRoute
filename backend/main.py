@@ -1,5 +1,6 @@
 import asyncio
 import hmac
+import logging
 import json
 import os
 import uuid
@@ -17,6 +18,10 @@ from .workflow import workflow, assess
 from .adapters import get_tools
 from . import fastn
 from .workflow import provider
+
+
+log = logging.getLogger('reroute')
+logging.basicConfig(level=logging.INFO, format='%(levelname)s:     %(name)s %(message)s')
 
 
 def create_case(body):
@@ -165,10 +170,12 @@ async def run_investigation(identifier, d, revision):
         async with asyncio.timeout(180):
             result = await workflow.ainvoke({'case': d})
         d = result['case']
-    except Exception:
+    except Exception as exc:
+        log.exception('Investigation %s failed', identifier)
+        reason = str(exc)[:240] if isinstance(exc, ValueError) else f'{type(exc).__name__} from the configured provider.'
         # Graph nodes mutate the case in place; discard partial results from the failed run.
         d.update(status='error', plans=[], recommended_id=None, summary='', sourcing_review='')
-        event(d, 'System', 'Investigation interrupted', 'The configured provider failed or returned invalid data. Check connectivity and configuration, then retry. No action was executed.', 'error')
+        event(d, 'System', 'Investigation interrupted', f'{reason} No action was executed. Retry with Re-investigate.', 'error')
     persist(identifier, d, revision)
     return d
 
