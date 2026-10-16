@@ -78,7 +78,7 @@ Browser tests require the application already running at port 8000 (or set `BASE
 
 `docker compose up --build` runs the application with PostgreSQL locally. Set a private `POSTGRES_PASSWORD` in `.env` for any non-disposable environment. Docker Desktop must be running.
 
-For Alternate Clouds, build from the included Dockerfile, set `PORT=8000` in both the service routing and environment, configure persistent PostgreSQL, then **Rebuild → Deploy**. Use one application worker/replica. Configure secrets before rebuilding. Verify `/api/health`, the homepage, a complete recovery case and persistence after restart. The application is not deployed by this repository; platform account access and credits are still required.
+For Alternate Clouds, follow [docs/DEPLOY.md](docs/DEPLOY.md): set `PORT=8000` and your variables, then **Rebuild → Deploy**, then verify `/api/health`, `/api/config` and a full recovery case. The container build and run were verified locally.
 
 ## Deliberate limits
 
@@ -88,4 +88,6 @@ This release verifies a draft purchase request, not shipment delivery. It has no
 
 - [Product scope and acceptance criteria](docs/PRODUCT.md)
 - [Integration contracts and guarantees](docs/INTEGRATIONS.md)
+- [Alternate Clouds deployment checklist](docs/DEPLOY.md)
+- [Submission draft, demo and video scripts](docs/SUBMISSION.md)
 - [Third-party acknowledgments](THIRD_PARTY.md)
