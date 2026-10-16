@@ -1,4 +1,3 @@
-import asyncio
 import os
 import uuid
 
@@ -13,6 +12,7 @@ def demo_snapshot(data):
         dict(id='atlas', name='Atlas Components', location='Rawalpindi', unit_price=5800, shipping=2500, stock=40, lead_days=2, certified=False, evidence_id='QT-1041', evidence='Synthetic quote QT-1041: 40 units in stock; two-day delivery. Compatibility certification not provided.'),
         dict(id='northstar', name='Northstar Industrial', location='Islamabad', unit_price=7200, shipping=1800, stock=28, lead_days=1, certified=True, evidence_id='QT-1042', evidence='Synthetic quote QT-1042: 28 certified units; next-day delivery. Fixture certification SPEC-204 attached.'),
         dict(id='meridian', name='Meridian Supply Co.', location='Lahore', unit_price=6400, shipping=4200, stock=65, lead_days=5, certified=True, evidence_id='QT-1043', evidence='Synthetic quote QT-1043: 65 certified units; five-day delivery via ground freight.'),
+        dict(id='crescent', name='Crescent Tech Traders', location='Faisalabad', unit_price=7900, shipping=2000, stock=25, lead_days=2, certified=True, evidence_id='QT-1045', evidence='Synthetic quote QT-1045: 25 certified units held for 48 hours; two-day courier delivery. Certification SPEC-204 attached.'),
         dict(id='vertex', name='Vertex Electronics', location='Karachi', unit_price=8900, shipping=5500, stock=12, lead_days=2, certified=True, evidence_id='QT-1044', evidence='Synthetic quote QT-1044: only 12 certified units available; air freight in two days.'),
     ]
     for s in suppliers:
@@ -42,31 +42,8 @@ class DemoTools:
 class FastnTools:
     """Contract-based MCP adapter. No guessed vendor-specific connector schemas."""
     async def call(self, name, arguments):
-        import httpx
-        from mcp import ClientSession
-        from mcp.client.streamable_http import streamable_http_client
-
-        url = os.environ['FASTN_MCP_URL']
-        if not url.startswith('https://'):
-            raise ValueError('FASTN_MCP_URL must use HTTPS.')
-        headers = {}
-        if os.getenv('FASTN_MCP_TOKEN'):
-            headers['Authorization'] = 'Bearer ' + os.environ['FASTN_MCP_TOKEN']
-        async with asyncio.timeout(35):
-            async with httpx.AsyncClient(headers=headers, timeout=30) as http:
-                async with streamable_http_client(url, http_client=http) as (read, write, _):
-                    async with ClientSession(read, write) as session:
-                        await session.initialize()
-                        result = await session.call_tool(name, arguments)
-                        if result.isError:
-                            raise RuntimeError('MCP tool reported failure.')
-                        if result.structuredContent is not None:
-                            return result.structuredContent
-                        import json
-                        for block in result.content:
-                            if block.type == 'text':
-                                return json.loads(block.text)
-                        raise ValueError('MCP tool did not return structured JSON.')
+        from . import fastn
+        return await fastn.call(name, arguments, os.environ['FASTN_MCP_URL'])
 
     async def snapshot(self, data):
         result = await self.call(os.getenv('FASTN_SNAPSHOT_TOOL', 'reroute_get_snapshot'), {'case_id': data['id'], 'item': data['item'], 'quantity': data['quantity']})

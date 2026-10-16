@@ -2,18 +2,20 @@
 
 **When supply breaks, find the next move.**
 
-A recovery workspace for investigating procurement disruptions, comparing supplier alternatives, incorporating human constraints, and creating a verified draft purchase request. Built with React, TypeScript, FastAPI, LangGraph and SQLAlchemy, with optional Claude tool-based evidence review/planning and a fastn MCP adapter.
+A recovery workspace for investigating procurement disruptions, comparing supplier alternatives, incorporating human constraints, and creating a verified draft purchase request. Built with React, TypeScript, FastAPI, LangGraph and SQLAlchemy, with Claude agents for evidence review and planning, and fastn MCP for dispatching approved recoveries to connected apps.
 
 ## What works
 
 - Report disruptions with item, quantity, budget and delivery constraints.
 - Run a three-stage investigation, sourcing and recovery-planning graph.
 - Compare feasible and blocked options against source evidence.
-- Require certified compatibility and replan with a reviewer note.
+- Reject a specific supplier, or require certified compatibility, and replan with a reviewer note.
+- Keep a decision history showing how human direction changed the plan.
 - Approve a specific plan version, then explicitly execute it.
-- Refresh supplier conditions before execution and invalidate outdated approvals.
+- Refresh supplier conditions before execution; if the approved supplier fails, revoke the approval and re-plan automatically for a fresh human decision.
 - Prevent duplicate requests with stable idempotency keys; reconcile a lost response.
 - Read the created request back and verify its fields before marking the action complete.
+- Dispatch the verified recovery to Slack, Sheets, Jira or another app through fastn's `execute_tool` (optional).
 - Persist cases, approval history and events across restarts; export case evidence.
 - Inspect supplier records, activity and integration mode in a responsive dashboard.
 
@@ -40,25 +42,25 @@ The default persistent database is `data/reroute.db` (ignored by Git). PostgreSQ
 
 ## Demo walkthrough
 
-1. Report a new disruption using the default 20-unit scenario.
-2. Start investigation. Atlas is initially the least-cost feasible option.
-3. Check **Require certified compatibility**, enter a reason, and **Revise & replan**.
-4. Northstar becomes the recommendation; Atlas is blocked by the new requirement.
-5. Inspect **Source evidence**, then **Approve recovery plan**.
-6. **Execute approved plan**. The destination read-back verifies a PKR 145,800 draft request.
-7. Open activity or export the evidence. Refresh the browser to confirm persistence.
+1. Open **Network adapters delayed** (or report a new disruption) and **Start investigation**. Atlas is the cheapest feasible option.
+2. Click **Reject** on Atlas, type why ("Atlas failed our last two compatibility audits"), and **Revise & replan**. Northstar becomes the recommendation; **How this plan evolved** records the redirection.
+3. **Approve recovery plan**.
+4. Open **Demo scenario controls → Withdraw recommended supplier**, then **Execute approved plan**. The execution guard catches the withdrawal, revokes the approval before anything is created, and the agents re-plan: Crescent Tech Traders is now recommended.
+5. Approve Crescent and execute. The destination read-back verifies a PKR 160,000 draft request (and, with dispatch configured, the team is notified through fastn).
+6. Inspect **Source evidence**, the activity log, or export the case. Refresh the browser to confirm persistence.
 
-Alternative failure demo: approve Atlas, open demo scenario controls, withdraw the recommended supplier, then execute. The approval is invalidated; re-investigate to find another plan.
+Shorter path: tick **Require certified compatibility** instead of rejecting Atlas; Northstar wins and executes at PKR 145,800.
 
 ## Connect Claude and fastn
 
 Read [integration contracts](docs/INTEGRATIONS.md). Set values in `.env` or platform secrets, never in source code:
 
-- `AGENT_MODE=anthropic`, `ANTHROPIC_API_KEY`, `ANTHROPIC_MODEL` for the live model.
-- `TOOL_MODE=fastn`, `FASTN_MCP_URL`, optional `FASTN_MCP_TOKEN`, and the three configured tool names for live tools.
+- `AGENT_MODE=anthropic` and `ANTHROPIC_API_KEY` for the Claude agents (`ANTHROPIC_MODEL` defaults to `claude-opus-5-5`).
+- `DISPATCH_MODE=fastn`, `FASTN_API_KEY`, `FASTN_PROJECT_ID`, `FASTN_DISPATCH_ACTION_ID` and `FASTN_DISPATCH_PARAMS` to notify a connected app after verification. Find the action with `python -m backend.fastn_discover "send a Slack message to a channel"`, then test it with `python -m backend.fastn_discover --test`.
+- `TOOL_MODE=fastn` only if you have built the custom supplier/ledger tools described in the integration doc.
 - `APP_TOKEN`: a strong random operator token of at least 24 characters for either connected mode. Enter it in the browser workspace form; it is kept in session storage.
 
-The fastn workflows must implement read snapshot, idempotent draft creation and destination lookup contracts. They are **not built-in tool names**. Configure them against an authorized test workspace and verify actual results before a live demonstration. Connected failures never fall back to simulated success.
+Connected failures never fall back to simulated success. Verify every live connection with a real run before presenting it as working.
 
 ## Test
 
@@ -70,7 +72,7 @@ npx playwright install chromium
 npx playwright test
 ```
 
-Browser tests require the application already running at port 8000. They create synthetic cases in that running workspace. Use a disposable database for CI. `PLAYWRIGHT_CHANNEL=msedge` can use installed Edge on Windows.
+Browser tests require the application already running at port 8000 (or set `BASE_URL`). They create synthetic cases in that running workspace. Use a disposable database for CI. `PLAYWRIGHT_CHANNEL=msedge` can use installed Edge on Windows.
 
 ## Containers and Alternate Clouds
 

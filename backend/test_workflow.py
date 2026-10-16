@@ -69,14 +69,139 @@ def test_unapproved_execution_and_infeasible_approval_blocked(client):
     assert client.post(f"/api/cases/{d['id']}/decision", json={'version': 1, 'action': 'approve', 'plan_id': 'meridian'}).status_code == 422
 
 
-def test_supplier_withdrawal_invalidates_approval(client):
+def test_supplier_withdrawal_invalidates_approval_and_replans(client):
     d = approve(client, investigate(client, case(client)['id']))
     client.post(f"/api/cases/{d['id']}/withdraw/atlas")
     result = client.post(f"/api/cases/{d['id']}/execute", json={'version': 1}).json()
-    assert result['status'] == 'blocked'
+    assert result['status'] == 'review'
+    assert result['version'] == 2
     assert result['approval'] is None
     assert result['execution'] is None
-    assert investigate(client, d['id'])['recommended_id'] == 'northstar'
+    assert result['recommended_id'] == 'northstar'
+    assert 'Supplier withdrew availability' in result['alert']['detail']
+    assert [x['action'] for x in result['decisions']] == ['approved', 'invalidated']
+    # The old approval cannot be replayed against the new plan.
+    assert client.post(f"/api/cases/{d['id']}/execute", json={'version': 2}).status_code == 409
+    assert approve(client, result)['alert'] is None
+    final = client.post(f"/api/cases/{d['id']}/execute", json={'version': 2}).json()
+    assert final['status'] == 'recovered' and final['execution']['supplier_id'] == 'northstar'
+
+
+def test_reviewer_rejects_specific_supplier(client):
+    d = investigate(client, case(client)['id'])
+    assert d['recommended_id'] == 'atlas'
+    revised = client.post(f"/api/cases/{d['id']}/decision", json={'version': 1, 'action': 'revise', 'note': 'Atlas failed our last two compatibility audits.', 'constraints': {'budget': 180000, 'deadline_days': 3, 'certified_only': False, 'excluded_suppliers': ['atlas']}}).json()
+    assert revised['recommended_id'] == 'northstar'
+    atlas = next(p for p in revised['plans'] if p['id'] == 'atlas')
+    assert not atlas['feasible'] and 'Rejected by reviewer' in atlas['blockers']
+    decision = revised['decisions'][-1]
+    assert decision['action'] == 'revised' and decision['rejected'] == ['Atlas Components'] and decision['previous_recommendation'] == 'Atlas Components'
+    bad = client.post(f"/api/cases/{d['id']}/decision", json={'version': 2, 'action': 'revise', 'note': 'x', 'constraints': {'excluded_suppliers': ['nobody']}})
+    assert bad.status_code == 422
+
+
+def test_fastn_dispatch_after_verification(client, monkeypatch):
+    from backend import fastn
+    sent = []
+    async def fake_dispatch(d):
+        sent.append(fastn.dispatch_values(d))
+        return '{"ok": true, "ts": "1"}'
+    monkeypatch.setenv('DISPATCH_MODE', 'fastn')
+    monkeypatch.setattr(fastn, 'dispatch', fake_dispatch)
+    d = approve(client, investigate(client, case(client)['id']))
+    result = client.post(f"/api/cases/{d['id']}/execute", json={'version': 1}).json()
+    assert result['status'] == 'recovered' and result['dispatch']['status'] == 'sent'
+    assert sent[0]['request_id'] == result['execution']['id'] and 'PKR 118,500' in sent[0]['message']
+    # Repeat execution is idempotent and never re-notifies.
+    client.post(f"/api/cases/{d['id']}/execute", json={'version': 1})
+    assert len(sent) == 1
+    assert client.post(f"/api/cases/{d['id']}/dispatch", json={}).status_code == 409
+
+
+def test_failed_dispatch_keeps_request_and_can_retry(client, monkeypatch):
+    from backend import fastn
+    async def broken(d):
+        raise fastn.FastnError('fastn AUTH_ERROR: token expired')
+    monkeypatch.setenv('DISPATCH_MODE', 'fastn')
+    monkeypatch.setattr(fastn, 'dispatch', broken)
+    d = approve(client, investigate(client, case(client)['id']))
+    result = client.post(f"/api/cases/{d['id']}/execute", json={'version': 1}).json()
+    assert result['status'] == 'recovered'
+    assert result['dispatch'] == {**result['dispatch'], 'status': 'failed', 'error': 'fastn AUTH_ERROR: token expired'}
+    async def works(d):
+        return '{}'
+    monkeypatch.setattr(fastn, 'dispatch', works)
+    assert client.post(f"/api/cases/{d['id']}/dispatch", json={}).json()['dispatch']['status'] == 'sent'
+
+
+def test_unknown_dispatch_requires_confirmation(client, monkeypatch):
+    from backend import fastn
+    async def works(d):
+        return '{}'
+    monkeypatch.setenv('DISPATCH_MODE', 'fastn')
+    monkeypatch.setattr(fastn, 'dispatch', works)
+    d = approve(client, investigate(client, case(client)['id']))
+    monkeypatch.setenv('DISPATCH_MODE', 'off')
+    client.post(f"/api/cases/{d['id']}/execute", json={'version': 1})
+    monkeypatch.setenv('DISPATCH_MODE', 'fastn')
+    data, revision = read(d['id'])
+    data['dispatch'] = {'status': 'unknown', 'label': 'Slack', 'at': 'now'}
+    save(d['id'], data, revision)
+    assert client.post(f"/api/cases/{d['id']}/dispatch", json={}).status_code == 409
+    assert client.post(f"/api/cases/{d['id']}/dispatch", json={'confirm_resend': True}).json()['dispatch']['status'] == 'sent'
+
+
+def test_claude_agents_offline(client, monkeypatch):
+    import json
+    import httpx
+    from anthropic import AsyncAnthropic
+    from backend import agents
+    requests = []
+    def message(content, stop='end_turn'):
+        return {'id': 'msg_1', 'type': 'message', 'role': 'assistant', 'model': 'claude-opus-5-5', 'content': content, 'stop_reason': stop, 'stop_sequence': None, 'usage': {'input_tokens': 1, 'output_tokens': 1}}
+    replies = iter([
+        message([{'type': 'tool_use', 'id': 'tu_1', 'name': 'inspect_supplier_quote', 'input': {'supplier_id': 'northstar'}}], 'tool_use'),
+        message([{'type': 'text', 'text': 'Northstar provides SPEC-204 certification; Atlas lacks it.'}]),
+        message([{'type': 'text', 'text': json.dumps({'recommended_id': 'northstar', 'summary': 'Northstar is certified and arrives next day.'})}]),
+    ])
+    def handler(request):
+        requests.append((request.headers, json.loads(request.content)))
+        return httpx.Response(200, json=next(replies))
+    monkeypatch.setenv('AGENT_MODE', 'anthropic')
+    monkeypatch.setattr(agents, 'AsyncAnthropic', lambda **kw: AsyncAnthropic(api_key='test', http_client=httpx.AsyncClient(transport=httpx.MockTransport(handler)), **kw))
+    d = investigate(client, case(client)['id'])
+    assert d['status'] == 'review' and d['recommended_id'] == 'northstar'
+    assert 'SPEC-204' in d['sourcing_review']
+    headers, body = requests[0]
+    assert body['model'] == 'claude-opus-5-5' and body['fallbacks'] == 'default' and body['output_config']['effort'] == 'low'
+    assert 'server-side-fallback-2026-07-01' in headers['anthropic-beta']
+    assert body['tools'][0]['strict'] is True
+    assert requests[1][1]['messages'][-1]['content'][0]['type'] == 'tool_result'
+    schema = requests[2][1]['output_config']['format']['schema']
+    assert schema['properties']['recommended_id']['enum'] == ['atlas', 'northstar', 'crescent']
+
+
+def test_claude_refusal_is_an_error_not_a_plan(client, monkeypatch):
+    import httpx
+    from anthropic import AsyncAnthropic
+    from backend import agents
+    refusal = {'id': 'msg_1', 'type': 'message', 'role': 'assistant', 'model': 'claude-opus-5-5', 'content': [], 'stop_reason': 'refusal', 'stop_sequence': None, 'usage': {'input_tokens': 1, 'output_tokens': 0}}
+    monkeypatch.setenv('AGENT_MODE', 'anthropic')
+    monkeypatch.setattr(agents, 'AsyncAnthropic', lambda **kw: AsyncAnthropic(api_key='test', http_client=httpx.AsyncClient(transport=httpx.MockTransport(lambda r: httpx.Response(200, json=refusal))), **kw))
+    d = investigate(client, case(client)['id'])
+    assert d['status'] == 'error' and not d['plans']
+
+
+def test_fastn_error_payloads_are_failures():
+    from types import SimpleNamespace
+    from backend import fastn
+    def result(text, error=False):
+        return SimpleNamespace(isError=error, structuredContent=None, content=[SimpleNamespace(type='text', text=text)])
+    assert fastn.parse_result(result('{"ts": "1"}')) == {'ts': '1'}
+    for bad in (result('{"error": "AUTH_ERROR", "message": "expired"}'), result('{"ok": false, "error": "channel_not_found"}'), result('boom', True)):
+        with pytest.raises(fastn.FastnError):
+            fastn.parse_result(bad)
+    assert fastn.render({'channel': '#ops', 'text': '{message} {unknown}', 'n': 3}, {'message': 'hi'}) == {'channel': '#ops', 'text': 'hi {unknown}', 'n': 3}
 
 
 def test_no_feasible_supplier_and_invalid_input(client):

@@ -10,6 +10,8 @@ class Constraints(StrictModel):
     budget: int = Field(default=180000, ge=1, le=100000000)
     deadline_days: int = Field(default=3, ge=1, le=90)
     certified_only: bool = False
+    # Suppliers a reviewer rejected for this case; the reason lives in the decision note.
+    excluded_suppliers: list[str] = Field(default_factory=list, max_length=50)
 
 
 class NewCase(StrictModel):
@@ -68,3 +70,7 @@ class PurchaseRequest(StrictModel):
     quantity: int
     total: int
     status: Literal['draft']
+
+
+class Dispatch(StrictModel):
+    confirm_resend: bool = False

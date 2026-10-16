@@ -12,7 +12,7 @@ ReRoute turns a disrupted procurement order into an evidence-backed recovery pla
 - The dashboard supports case creation, investigation, comparison, review, execution, evidence and activity inspection.
 
 ## Architecture
-React/TypeScript → FastAPI → LangGraph investigator/sourcing/planner → demo or fastn MCP adapter. SQLAlchemy persists case state and the local demo ledger; PostgreSQL is the deployment database. Claude is an optional planning provider. Deterministic validators enforce quantity, budget, lead time and certification requirements. A backend approval gateway and idempotent executor own mutations.
+React/TypeScript → FastAPI → LangGraph investigator/sourcing/planner → execution guard → verified draft request → fastn MCP dispatch (execute_tool) to a connected app. SQLAlchemy persists case state and the local demo ledger; PostgreSQL is the deployment database. Claude powers the sourcing agent and planner in connected mode. Deterministic validators enforce quantity, budget, lead time and certification requirements. A backend approval gateway and idempotent executor own mutations.
 
 ## Competition constraints
 Deploy the application on Alternate Clouds; retain fastn as the live integration layer pending organizer clarification. Theme: Human + AI: Better Together. Submission deadline per supplied handbook: October 17, 2026 at 12:45 PM PKT. Include a 2–3 minute video, repository, deployment proof, PDF and participant-written LinkedIn post/reshare. This repository must not generate that post.

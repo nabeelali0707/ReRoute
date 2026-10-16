@@ -11,15 +11,17 @@ from fastapi.responses import StreamingResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy import select
 
-from .models import NewCase, Decision, Execute, PurchaseRequest
+from .models import NewCase, Decision, Execute, Dispatch
 from .store import Base, engine, Session, Case, read, save, all_cases, event, now
 from .workflow import workflow, assess
 from .adapters import get_tools
+from . import fastn
+from .agents import model as agent_model
 
 
 def create_case(body):
     identifier = 'RR-' + uuid.uuid4().hex[:6].upper()
-    d = dict(id=identifier, **body.model_dump(), status='open', version=0, plans=[], suppliers=[], events=[], approval=None, execution=None, created_at=now(), updated_at=now(), review_note='', withdrawn_suppliers=[])
+    d = dict(id=identifier, **body.model_dump(), status='open', version=0, plans=[], suppliers=[], events=[], approval=None, execution=None, created_at=now(), updated_at=now(), review_note='', withdrawn_suppliers=[], decisions=[], dispatch=None, alert=None)
     event(d, 'Operations', 'Disruption reported', body.disruption, 'warning')
     with Session.begin() as session:
         session.add(Case(id=identifier, payload=d))
@@ -30,11 +32,15 @@ def create_case(body):
 async def lifespan(app):
     if os.getenv('AGENT_MODE', 'demo') not in ('demo', 'anthropic') or os.getenv('TOOL_MODE', 'demo') not in ('demo', 'fastn'):
         raise RuntimeError('Invalid provider mode.')
-    if os.getenv('AGENT_MODE', 'demo') != 'demo' or os.getenv('TOOL_MODE', 'demo') != 'demo':
+    if os.getenv('DISPATCH_MODE', 'off') not in ('off', 'fastn'):
+        raise RuntimeError('DISPATCH_MODE must be off or fastn.')
+    if os.getenv('AGENT_MODE', 'demo') != 'demo' or os.getenv('TOOL_MODE', 'demo') != 'demo' or fastn.dispatch_enabled():
         if len(os.getenv('APP_TOKEN', '')) < 24:
             raise RuntimeError('Set a strong APP_TOKEN (at least 24 characters) for connected modes.')
-    if os.getenv('AGENT_MODE') == 'anthropic' and not all(os.getenv(k) for k in ('ANTHROPIC_API_KEY', 'ANTHROPIC_MODEL')):
-        raise RuntimeError('Anthropic mode requires ANTHROPIC_API_KEY and ANTHROPIC_MODEL.')
+    if os.getenv('AGENT_MODE') == 'anthropic' and not os.getenv('ANTHROPIC_API_KEY'):
+        raise RuntimeError('Anthropic mode requires ANTHROPIC_API_KEY.')
+    if fastn.dispatch_enabled() and not all(os.getenv(k) for k in ('FASTN_API_KEY', 'FASTN_PROJECT_ID', 'FASTN_DISPATCH_ACTION_ID')):
+        raise RuntimeError('fastn dispatch requires FASTN_API_KEY, FASTN_PROJECT_ID and FASTN_DISPATCH_ACTION_ID.')
     if os.getenv('TOOL_MODE') == 'fastn' and not os.getenv('FASTN_MCP_URL', '').startswith('https://'):
         raise RuntimeError('fastn mode requires an HTTPS FASTN_MCP_URL.')
     Base.metadata.create_all(engine)
@@ -46,6 +52,11 @@ async def lifespan(app):
             was_execution = d['status'] == 'executing'
             d['status'] = 'execution_error' if was_execution else 'error'
             event(d, 'System', 'Interrupted operation recovered', 'Server restarted. Reconcile the existing request before retrying.' if was_execution else 'Server restarted. Investigation can be retried.', 'warning')
+            save(d['id'], d, revision)
+        if (record.get('dispatch') or {}).get('status') == 'sending':
+            d, revision = read(record['id'])
+            d['dispatch']['status'] = 'unknown'
+            event(d, 'System', 'Dispatch outcome unknown', 'Server restarted while notifying the connected app. Check the destination before resending.', 'warning')
             save(d['id'], d, revision)
     if not all_cases() and os.getenv('TOOL_MODE', 'demo') == 'demo':
         create_case(NewCase())
@@ -62,11 +73,24 @@ def authorize(authorization: str = Header(default='')):
         raise HTTPException(401, 'Workspace token required.')
 
 
+def normalize(d):
+    # Cases saved by earlier releases predate these fields.
+    for key, default in (('decisions', []), ('dispatch', None), ('alert', None)):
+        d.setdefault(key, default)
+    d['constraints'].setdefault('excluded_suppliers', [])
+    return d
+
+
 def load_case(identifier):
     try:
-        return read(identifier)
+        d, revision = read(identifier)
     except KeyError:
         raise HTTPException(404, 'Case not found.')
+    return normalize(d), revision
+
+
+def record_decision(d, action, **details):
+    d['decisions'].append({'version': d['version'], 'action': action, 'at': now(), **details})
 
 
 def persist(identifier, data, revision):
@@ -83,12 +107,13 @@ def health():
 
 @app.get('/api/config')
 def config():
-    return {'agent_mode': os.getenv('AGENT_MODE', 'demo'), 'tool_mode': os.getenv('TOOL_MODE', 'demo'), 'auth_required': bool(os.getenv('APP_TOKEN')), 'model': os.getenv('ANTHROPIC_MODEL') if os.getenv('AGENT_MODE') == 'anthropic' else None}
+    return {'agent_mode': os.getenv('AGENT_MODE', 'demo'), 'tool_mode': os.getenv('TOOL_MODE', 'demo'), 'auth_required': bool(os.getenv('APP_TOKEN')), 'model': agent_model() if os.getenv('AGENT_MODE') == 'anthropic' else None,
+            'dispatch_mode': os.getenv('DISPATCH_MODE', 'off'), 'dispatch_label': fastn.dispatch_label() if fastn.dispatch_enabled() else None}
 
 
 @app.get('/api/cases', dependencies=[Depends(authorize)])
 def list_cases():
-    return sorted(all_cases(), key=lambda d: d['created_at'], reverse=True)
+    return sorted(map(normalize, all_cases()), key=lambda d: d['created_at'], reverse=True)
 
 
 @app.post('/api/cases', status_code=201, dependencies=[Depends(authorize)])
@@ -113,7 +138,8 @@ async def run_investigation(identifier, d, revision):
             result = await workflow.ainvoke({'case': d})
         d = result['case']
     except Exception:
-        d['status'] = 'error'
+        # Graph nodes mutate the case in place; discard partial results from the failed run.
+        d.update(status='error', plans=[], recommended_id=None, summary='', sourcing_review='')
         event(d, 'System', 'Investigation interrupted', 'The configured provider failed or returned invalid data. Check connectivity and configuration, then retry. No action was executed.', 'error')
     persist(identifier, d, revision)
     return d
@@ -127,6 +153,17 @@ async def investigate(identifier: str):
     return await run_investigation(identifier, d, revision)
 
 
+def describe_changes(old, new):
+    changes = []
+    if old['budget'] != new['budget']:
+        changes.append(f"Budget PKR {old['budget']:,} → {new['budget']:,}")
+    if old['deadline_days'] != new['deadline_days']:
+        changes.append(f"Deadline {old['deadline_days']} → {new['deadline_days']} days")
+    if old['certified_only'] != new['certified_only']:
+        changes.append('Certification required' if new['certified_only'] else 'Certification no longer required')
+    return changes
+
+
 @app.post('/api/cases/{identifier}/decision', dependencies=[Depends(authorize)])
 async def decision(identifier: str, body: Decision):
     d, revision = load_case(identifier)
@@ -135,15 +172,25 @@ async def decision(identifier: str, body: Decision):
     if body.action == 'revise':
         if body.constraints is None or not body.note.strip():
             raise HTTPException(422, 'Replanning requires constraints and a reason.')
+        known = {p['id']: p['supplier'] for p in d['plans']}
+        if any(s not in known and s not in d['constraints']['excluded_suppliers'] for s in body.constraints.excluded_suppliers):
+            raise HTTPException(422, 'Only suppliers in this case can be rejected.')
+        newly_rejected = [known[s] for s in body.constraints.excluded_suppliers if s not in d['constraints']['excluded_suppliers']]
+        recommended = next((p for p in d['plans'] if p['id'] == d.get('recommended_id')), None)
+        record_decision(d, 'revised', note=body.note, rejected=newly_rejected, previous_recommendation=recommended['supplier'] if recommended else None,
+                        changes=describe_changes(d['constraints'], body.constraints.model_dump()))
         d['constraints'] = body.constraints.model_dump()
         d['review_note'] = body.note
-        event(d, 'Human reviewer', 'Recovery constraints revised', body.note, 'warning')
+        d['alert'] = None
+        event(d, 'Human reviewer', 'Recovery constraints revised', body.note + (f" Rejected: {', '.join(newly_rejected)}." if newly_rejected else ''), 'warning')
         return await run_investigation(identifier, d, revision)
     plan = next((p for p in d['plans'] if p['id'] == body.plan_id and p['feasible']), None)
     if plan is None:
         raise HTTPException(422, 'Choose a feasible plan.')
     d['approval'] = {'plan_id': plan['id'], 'version': d['version'], 'at': now(), 'note': body.note, 'total': plan['total']}
     d['status'] = 'approved'
+    d['alert'] = None
+    record_decision(d, 'approved', plan_id=plan['id'], supplier=plan['supplier'], total=plan['total'], note=body.note)
     event(d, 'Human reviewer', 'Plan approved', f"Version {d['version']} · {plan['supplier']} · PKR {plan['total']:,}. {body.note}", 'success')
     persist(identifier, d, revision)
     return d
@@ -162,6 +209,7 @@ async def execute(identifier: str, body: Execute):
     revision = persist(identifier, d, revision)
     key = f"{identifier}:v{d['version']}:{d['approval']['plan_id']}"
     tools = get_tools()
+    replan = False
     try:
         async with asyncio.timeout(120):
             expected = dict(idempotency_key=key, case_id=identifier, supplier_id=d['approval']['plan_id'], quantity=d['quantity'], total=d['approval']['total'])
@@ -171,27 +219,61 @@ async def execute(identifier: str, body: Execute):
                 supplier = next((s for s in snapshot.suppliers if s.id == expected['supplier_id']), None)
                 current = assess(supplier.model_dump(), d) if supplier else None
                 if current is None or not current['feasible'] or current['total'] != expected['total']:
-                    d['status'] = 'blocked'
-                    d['approval'] = None
-                    d['plans'] = []
-                    d['recommended_id'] = None
-                    d['version'] += 1
-                    d['summary'] = 'Supplier conditions changed. Re-investigate before approving another plan.'
-                    event(d, 'Execution guard', 'Approval invalidated', d['summary'], 'warning')
-                    persist(identifier, d, revision)
-                    return d
-                await tools.create(expected)
-            verified = await tools.lookup(key)
-            if verified is None or any(getattr(verified, k) != v for k, v in expected.items()) or verified.status != 'draft':
-                raise ValueError('Destination read-back does not match the approved request.')
-            d['execution'] = verified.model_dump()
-            d['status'] = 'recovered'
-            event(d, 'Executor', 'Purchase request created and verified', f"{verified.id} read back from {'local demo ledger' if os.getenv('TOOL_MODE', 'demo') == 'demo' else 'fastn-connected system'}. Draft only; no payment sent and delivery not confirmed.", 'success')
+                    approved = next((p for p in d['plans'] if p['id'] == expected['supplier_id']), {})
+                    reason = '; '.join(current['blockers']) if current and current['blockers'] else 'Supplier no longer listed' if current is None else f"Price changed to PKR {current['total']:,}"
+                    record_decision(d, 'invalidated', plan_id=expected['supplier_id'], supplier=approved.get('supplier'), total=expected['total'], note=reason)
+                    d['alert'] = {'title': f"{approved.get('supplier', 'Approved supplier')} can no longer fulfil this plan", 'detail': f"{reason}. Your approval was revoked before anything was created, and your agents re-planned against current supplier conditions. Review the new plan."}
+                    event(d, 'Execution guard', 'Approval invalidated', f"Live re-check before execution: {reason}. No request was created.", 'warning')
+                    event(d, 'Recovery planner', 'Re-planning automatically', 'Searching current supplier conditions for another feasible recovery path.')
+                    replan = True
+                else:
+                    await tools.create(expected)
+            if not replan:
+                verified = await tools.lookup(key)
+                if verified is None or any(getattr(verified, k) != v for k, v in expected.items()) or verified.status != 'draft':
+                    raise ValueError('Destination read-back does not match the approved request.')
+                d['execution'] = verified.model_dump()
+                d['status'] = 'recovered'
+                event(d, 'Executor', 'Purchase request created and verified', f"{verified.id} read back from {'local demo ledger' if os.getenv('TOOL_MODE', 'demo') == 'demo' else 'fastn-connected system'}. Draft only; no payment sent and delivery not confirmed.", 'success')
     except Exception:
         d['status'] = 'execution_error'
         event(d, 'Executor', 'Execution needs reconciliation', 'Could not verify the destination record. Retry checks the same idempotency key before creating anything. Approval and request key remain unchanged.', 'error')
+    if replan:
+        # Outside the execution timeout: re-planning may call the model and has its own limit.
+        return await run_investigation(identifier, d, revision)
+    revision = persist(identifier, d, revision)
+    if d['status'] == 'recovered' and fastn.dispatch_enabled():
+        return await run_dispatch(identifier, d, revision)
+    return d
+
+
+async def run_dispatch(identifier, d, revision):
+    label = fastn.dispatch_label()
+    d['dispatch'] = {'status': 'sending', 'label': label, 'at': now()}
+    revision = persist(identifier, d, revision)
+    try:
+        result = await fastn.dispatch(d)
+        d['dispatch'] = {'status': 'sent', 'label': label, 'at': now(), 'result': result}
+        event(d, 'Coordinator', 'Recovery dispatched through fastn', f"{label} · execute_tool completed. Connector response recorded as evidence.", 'success')
+    except Exception as exc:
+        reason = str(exc)[:300] if isinstance(exc, fastn.FastnError) else f'{type(exc).__name__} while contacting fastn.'
+        d['dispatch'] = {'status': 'failed', 'label': label, 'at': now(), 'error': reason}
+        event(d, 'Coordinator', 'Dispatch failed', f"{label}: {reason} The verified request is unaffected; retry when the connector is available.", 'error')
     persist(identifier, d, revision)
     return d
+
+
+@app.post('/api/cases/{identifier}/dispatch', dependencies=[Depends(authorize)])
+async def redispatch(identifier: str, body: Dispatch):
+    if not fastn.dispatch_enabled():
+        raise HTTPException(409, 'fastn dispatch is not configured.')
+    d, revision = load_case(identifier)
+    state = (d['dispatch'] or {}).get('status')
+    if d['status'] != 'recovered' or state in ('sent', 'sending'):
+        raise HTTPException(409, 'Nothing to dispatch for this case.')
+    if state == 'unknown' and not body.confirm_resend:
+        raise HTTPException(409, 'The previous dispatch may have been delivered. Check the destination, then confirm resending.')
+    return await run_dispatch(identifier, d, revision)
 
 
 @app.post('/api/cases/{identifier}/withdraw/{supplier_id}', dependencies=[Depends(authorize)])
