@@ -18,10 +18,10 @@ Every requirement from the Participant Handbook and the Deployment & Troubleshoo
 | Criterion | Weight | How ReRoute addresses it |
 |---|---|---|
 | Technical execution & reliability | 25 | End-to-end flow tested: 18 backend + 3 browser tests, run against the production container. Handles provider failure, model refusal, lost responses (idempotent retry), stale approvals, supplier changes, restarts, connector errors. Never fakes success. |
-| Usefulness & real-world impact | 20 | Real procurement pain: a late order with a hard deadline and budget. Outcome is a verified draft purchase request plus team notification. |
+| Usefulness & real-world impact | 20 | Covers the whole job: Risk Radar spots at-risk orders early, then the recovery flow fixes them. Outcome is a verified draft purchase request and a stakeholder report. |
 | Theme alignment | 15 | The human rejects and redirects plans with reasons, approves one exact version, and re-confirms when reality changes. Decision history shows how human input changed the plan. |
 | Creativity & uniqueness | 15 | Not a chat wrapper: agents re-plan automatically when an approved supplier fails, but never act without a fresh human decision. |
-| Automation depth & integration | 15 | LangGraph workflow (investigator → sourcing agent → planner); LLM agent with a read-only evidence tool; deterministic validation; fastn MCP `execute_tool` dispatch to a real app. |
+| Automation depth & integration | 15 | Five AI roles: risk analyst, investigator, sourcing agent (read-only evidence tool), planner, and Ask ReRoute. Deterministic validation; LangGraph workflow; fastn MCP `execute_tool` dispatch path. |
 | User experience & presentation | 10 | Guided workflow track, decision desk, evidence tab, activity log, connection check; readable on a projector and on mobile. |
 
 ## Submission PDF (pp.9–11)

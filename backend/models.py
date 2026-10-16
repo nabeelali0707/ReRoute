@@ -74,3 +74,8 @@ class PurchaseRequest(StrictModel):
 
 class Dispatch(StrictModel):
     confirm_resend: bool = False
+
+
+class Ask(StrictModel):
+    question: str = Field(min_length=2, max_length=500)
+    case_id: str | None = Field(default=None, max_length=64)

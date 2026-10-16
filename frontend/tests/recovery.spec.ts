@@ -6,6 +6,7 @@ test('operator changes constraints, approves and verifies a request', async ({ p
   const seed = await request.post('/api/cases', { data: { title: `Browser recovery ${Date.now()}` } });
   const created = await seed.json();
   await page.goto('/');
+  await page.getByRole('button', { name: /Recovery overview/ }).click();
   await page.getByRole('button', { name: new RegExp(created.title) }).click();
   await page.getByRole('button', { name: 'Start investigation', exact: true }).click();
   await expect(page.getByRole('radio', { name: 'Select Atlas Components' })).toBeChecked();
@@ -19,6 +20,7 @@ test('operator changes constraints, approves and verifies a request', async ({ p
   await page.getByRole('button', { name: 'Execute approved plan' }).click();
   await expect(page.getByRole('heading', { name: 'Recovery request verified.' })).toBeVisible();
   await page.reload();
+  await page.getByRole('button', { name: /Recovery overview/ }).click();
   await page.getByRole('button', { name: new RegExp(created.title) }).click();
   await expect(page.getByRole('heading', { name: 'Recovery request verified.' })).toBeVisible();
   await page.getByRole('button', { name: 'Source evidence', exact: true }).click();
@@ -35,6 +37,7 @@ test('reviewer rejects a supplier, then a withdrawal triggers automatic re-plann
   page.on('pageerror', e => errors.push(e.message));
   const created = await (await request.post('/api/cases', { data: { title: `Rejection flow ${Date.now()}` } })).json();
   await page.goto('/');
+  await page.getByRole('button', { name: /Recovery overview/ }).click();
   await page.getByRole('button', { name: new RegExp(created.title) }).click();
   await page.getByRole('button', { name: 'Start investigation', exact: true }).click();
   await expect(page.getByRole('radio', { name: 'Select Atlas Components' })).toBeChecked();
@@ -75,4 +78,33 @@ test('mobile layout and case creation are usable', async ({ page }) => {
   const overflow = await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth);
   expect(overflow).toBe(false);
   await page.screenshot({ path: 'test-results/mobile-workspace.png', fullPage: true });
+});
+
+test('risk radar flags orders, opens a recovery case, answers questions and prints a report', async ({ page }) => {
+  const errors: string[] = [];
+  page.on('pageerror', e => errors.push(e.message));
+  await page.goto('/');
+  await expect(page.getByRole('heading', { name: 'See trouble before it arrives.' })).toBeVisible();
+  const table = page.getByRole('table', { name: 'Order risk table' });
+  await expect(table.getByRole('row', { name: /PO-2401/ }).getByText('High')).toBeVisible();
+  await expect(page.getByRole('img', { name: /Risk matrix/ })).toBeVisible();
+  await page.getByRole('button', { name: /Refresh rule-based analysis|Run AI risk analysis/ }).click();
+  await expect(page.locator('.priority-list').getByText('PO-2401')).toBeVisible();
+  await page.screenshot({ path: 'test-results/risk-radar.png', fullPage: true });
+  await page.getByRole('button', { name: /(Start recovery|Open case) for PO-2402|Open RR-.* for PO-2402/ }).first().click();
+  await expect(page.getByRole('heading', { name: /Temperature sensor at risk \(PO-2402\)/ })).toBeVisible();
+  // Reopening a flagged order returns its existing case, which may already be investigated.
+  const start = page.getByRole('button', { name: 'Start investigation', exact: true });
+  if (await start.isVisible()) await start.click();
+  await expect(page.getByRole('radio', { name: /Select / }).first()).toBeVisible();
+  await page.getByRole('button', { name: 'Ask ReRoute' }).click();
+  await page.getByRole('textbox', { name: 'Question for ReRoute' }).fill('Which orders are at risk?');
+  await page.getByRole('button', { name: 'Send question' }).click();
+  await expect(page.locator('.ask-message.assistant').last()).toContainText('PO-2401');
+  await page.getByRole('button', { name: 'Close Ask ReRoute' }).click();
+  await page.getByRole('button', { name: 'Recovery report' }).click();
+  await expect(page.locator('.report-print').getByRole('heading', { name: /Temperature sensor at risk/, level: 2 })).toBeVisible();
+  await expect(page.locator('.report-print')).toContainText('Options compared');
+  await page.screenshot({ path: 'test-results/recovery-report.png' });
+  expect(errors).toEqual([]);
 });

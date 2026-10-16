@@ -15,6 +15,20 @@ def demo_snapshot(data):
         dict(id='crescent', name='Crescent Tech Traders', location='Faisalabad', unit_price=7900, shipping=2000, stock=25, lead_days=2, certified=True, evidence_id='QT-1045', evidence='Synthetic quote QT-1045: 25 certified units held for 48 hours; two-day courier delivery. Certification SPEC-204 attached.'),
         dict(id='vertex', name='Vertex Electronics', location='Karachi', unit_price=8900, shipping=5500, stock=12, lead_days=2, certified=True, evidence_id='QT-1044', evidence='Synthetic quote QT-1044: only 12 certified units available; air freight in two days.'),
     ]
+    item = data.get('item', '')
+    if item.lower() != 'usb-c network adapter':
+        # Other items reuse the same supplier mix, priced from the order's reference
+        # unit price and with stock scaled to the requested quantity.
+        from .radar import ORDERS
+        reference = next((o['value'] / o['quantity'] for o in ORDERS if o['item'].lower() == item.lower()), None)
+        factor = reference / 6000 if reference else 1
+        scale = max(1, data.get('quantity', 20) / 20)
+        for s in suppliers:
+            s['unit_price'] = max(1, round(s['unit_price'] * factor / 10) * 10)
+            s['stock'] = round(s['stock'] * scale)
+            s['evidence'] = s['evidence'].replace(' units', f' units of {item}', 1)
+            if scale > 1:
+                s['evidence'] =f"Synthetic quote {s['evidence_id']}: {s['stock']} units of {item} available; {s['lead_days']}-day delivery." + (' Certification provided.' if s['certified'] else ' Certification not provided.')
     for s in suppliers:
         s['available'] = s['id'] not in data.get('withdrawn_suppliers', [])
     return Snapshot(source='Synthetic supplier quote pack · Demo', suppliers=suppliers)

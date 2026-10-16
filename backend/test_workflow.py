@@ -316,3 +316,70 @@ def test_provider_failure_does_not_fake_success(client, monkeypatch):
     assert d['status'] == 'error'
     assert not d['plans']
     assert not d['execution']
+
+
+def test_radar_scores_orders_with_explainable_rule(client):
+    from backend import radar
+    pf = client.get('/api/radar').json()
+    orders = {o['id']: o for o in pf['orders']}
+    po = orders['PO-2401']
+    assert po['variance_days'] == 7 and po['schedule_risk_pct'] == 233.3 and po['level'] == 'High'
+    assert po['signal_ids'] == ['SIG-11', 'SIG-12']
+    assert orders['PO-2405']['variance_days'] == 0 and orders['PO-2405']['schedule_level'] == 'Low'
+    assert pf['orders'][0]['level'] == 'High'
+    assert sum(pf['counts'].values()) == len(radar.ORDERS)
+    assert radar.schedule_risk({'promised_days': 22, 'required_days': 21})[2] == 'Low'
+    assert radar.schedule_risk({'promised_days': 15, 'required_days': 14})[2] == 'Medium'
+
+
+def test_radar_order_becomes_recovery_case_once(client):
+    first = client.post('/api/radar/PO-2402/case')
+    assert first.status_code == 201
+    d = first.json()
+    assert d['source_po'] == 'PO-2402' and d['item'] == 'Temperature sensor' and d['quantity'] == 12
+    assert d['constraints']['deadline_days'] == 6 and d['constraints']['budget'] == 120000
+    assert client.post('/api/radar/PO-2402/case').json()['id'] == d['id']
+    assert client.get('/api/radar').json()['linked_cases']['PO-2402']['case_id'] == d['id']
+    d = investigate(client, d['id'])
+    assert d['status'] == 'review'
+    assert all('Temperature sensor' in s['evidence'] for s in d['suppliers'])
+    atlas = next(p for p in d['plans'] if p['id'] == 'atlas')
+    assert atlas['total'] == 7730 * 12 + 2500 and atlas['feasible']
+    assert client.post('/api/radar/PO-9999/case').status_code == 404
+
+
+def test_large_quantity_order_scales_stock(client):
+    d = investigate(client, client.post('/api/radar/PO-2406/case').json()['id'])
+    assert any(p['feasible'] for p in d['plans'])
+    assert all(s['stock'] >= 120 for s in d['suppliers'])
+
+
+def test_radar_analysis_and_ask_in_demo_mode(client):
+    analysis = client.post('/api/radar/analyze').json()
+    assert analysis['engine'] == 'Rule-based demo analyst' and analysis['priorities'][0]['id'] == 'PO-2401'
+    assert client.get('/api/radar').json()['analysis']['summary'] == analysis['summary']
+    answer = client.post('/api/ask', json={'question': 'Which orders are at risk?'}).json()
+    assert 'PO-2401' in answer['answer']
+    assert client.post('/api/ask', json={'question': 'x'}).status_code == 422
+
+
+def test_groq_analyst_drops_unknown_orders(client, monkeypatch):
+    import json
+    replies = iter([{'role': 'assistant', 'content': json.dumps({'summary': 'Act on PO-2401 first (SIG-11).', 'priorities': [{'id': 'PO-2401', 'action': 'Open a recovery case today.'}, {'id': 'PO-0000', 'action': 'invented'}]})}])
+    groq_transport(monkeypatch, replies, [])
+    analysis = client.post('/api/radar/analyze').json()
+    assert analysis['engine'].startswith('Groq') and [p['id'] for p in analysis['priorities']] == ['PO-2401']
+
+
+def test_ask_uses_case_context_with_groq(client, monkeypatch):
+    import json
+    requests = []
+    replies = iter([{'role': 'assistant', 'content': 'Northstar (QT-1042) is certified.'}])
+    groq_transport(monkeypatch, replies, requests)
+    monkeypatch.setenv('AGENT_MODE', 'demo')
+    d = investigate(client, case(client)['id'])
+    monkeypatch.setenv('AGENT_MODE', 'groq')
+    answer = client.post('/api/ask', json={'question': 'Why Northstar?', 'case_id': d['id']}).json()
+    assert answer['answer'].startswith('Northstar')
+    sent = json.loads(requests[0]['messages'][1]['content'])
+    assert sent['context']['open_case']['id'] == d['id'] and sent['question'] == 'Why Northstar?'

@@ -31,6 +31,24 @@ class Ledger(Base):
     payload: Mapped[dict] = mapped_column(JSON)
 
 
+class Setting(Base):
+    """Small keyed JSON documents, such as the latest Risk Radar analysis."""
+    __tablename__ = 'settings'
+    key: Mapped[str] = mapped_column(String(64), primary_key=True)
+    payload: Mapped[dict] = mapped_column(JSON)
+
+
+def get_setting(key):
+    with Session() as session:
+        row = session.get(Setting, key)
+        return copy.deepcopy(row.payload) if row else None
+
+
+def put_setting(key, payload):
+    with Session.begin() as session:
+        session.merge(Setting(key=key, payload=payload))
+
+
 def now():
     return datetime.now(timezone.utc).isoformat()
 

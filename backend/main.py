@@ -12,8 +12,9 @@ from fastapi.responses import StreamingResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy import select
 
-from .models import NewCase, Decision, Execute, Dispatch
-from .store import Base, engine, Session, Case, read, save, all_cases, event, now
+from .models import NewCase, Decision, Execute, Dispatch, Ask
+from .store import Base, engine, Session, Case, read, save, all_cases, event, now, get_setting, put_setting
+from . import radar
 from .workflow import workflow, assess
 from .adapters import get_tools
 from . import fastn
@@ -24,10 +25,10 @@ log = logging.getLogger('reroute')
 logging.basicConfig(level=logging.INFO, format='%(levelname)s:     %(name)s %(message)s')
 
 
-def create_case(body):
+def create_case(body, source_po=None):
     identifier = 'RR-' + uuid.uuid4().hex[:6].upper()
-    d = dict(id=identifier, **body.model_dump(), status='open', version=0, plans=[], suppliers=[], events=[], approval=None, execution=None, created_at=now(), updated_at=now(), review_note='', withdrawn_suppliers=[], decisions=[], dispatch=None, alert=None)
-    event(d, 'Operations', 'Disruption reported', body.disruption, 'warning')
+    d = dict(id=identifier, **body.model_dump(), status='open', version=0, plans=[], suppliers=[], events=[], approval=None, execution=None, created_at=now(), updated_at=now(), review_note='', withdrawn_suppliers=[], decisions=[], dispatch=None, alert=None, source_po=source_po)
+    event(d, 'Risk Radar' if source_po else 'Operations', 'Disruption reported', body.disruption, 'warning')
     with Session.begin() as session:
         session.add(Case(id=identifier, payload=d))
     return d
@@ -82,7 +83,7 @@ def authorize(authorization: str = Header(default='')):
 
 def normalize(d):
     # Cases saved by earlier releases predate these fields.
-    for key, default in (('decisions', []), ('dispatch', None), ('alert', None)):
+    for key, default in (('decisions', []), ('dispatch', None), ('alert', None), ('source_po', None)):
         d.setdefault(key, default)
     d['constraints'].setdefault('excluded_suppliers', [])
     return d
@@ -131,6 +132,80 @@ async def diagnostics():
     if not results:
         results.append({'name': 'Demo mode', 'ok': True, 'detail': 'No live providers configured; nothing external to check.'})
     return results
+
+
+def radar_context(pf):
+    """Compact, model-friendly view of the portfolio (keeps free-tier token use low)."""
+    return {
+        'currency': 'PKR',
+        'orders': [{k: o[k] for k in ('id', 'item', 'quantity', 'origin', 'value', 'required_days', 'promised_days', 'schedule_risk_pct', 'level', 'signal_ids')} for o in pf['orders']],
+        'signals': [{k: s[k] for k in ('id', 'country', 'category', 'severity', 'headline')} for s in pf['signals']],
+    }
+
+
+@app.get('/api/radar', dependencies=[Depends(authorize)])
+def get_radar():
+    pf = radar.portfolio()
+    linked = {}
+    for d in all_cases():
+        if d.get('source_po'):
+            linked[d['source_po']] = {'case_id': d['id'], 'status': d['status']}
+    return {**pf, 'analysis': get_setting('radar_analysis'), 'linked_cases': linked}
+
+
+@app.post('/api/radar/analyze', dependencies=[Depends(authorize)])
+async def analyze_radar():
+    pf = radar.portfolio()
+    ids = {o['id'] for o in pf['orders']}
+    analysis = {'at': now(), 'engine': 'Rule-based demo analyst', 'summary': pf['rule_summary'],
+                'priorities': [{'id': o['id'], 'action': 'Open a recovery case and compare alternatives before the need date.'} for o in pf['orders'] if o['level'] == 'High'][:3]}
+    if provider():
+        try:
+            async with asyncio.timeout(120):
+                result = await provider().analyze_portfolio(radar_context(pf))
+            priorities = [{'id': p['id'], 'action': str(p.get('action', ''))[:200]} for p in result.get('priorities', []) if isinstance(p, dict) and p.get('id') in ids][:3]
+            if not isinstance(result.get('summary'), str) or not result['summary'].strip():
+                raise ValueError('Analyst returned no summary.')
+            analysis = {'at': now(), 'engine': f"{'Groq' if os.getenv('AGENT_MODE') == 'groq' else 'Claude'} · {provider().model()}", 'summary': result['summary'][:600], 'priorities': priorities}
+        except Exception as exc:
+            log.exception('Radar analysis failed')
+            raise HTTPException(502, str(exc)[:240] if isinstance(exc, ValueError) else 'The AI analyst could not be reached. Try again in a minute.')
+    put_setting('radar_analysis', analysis)
+    return analysis
+
+
+@app.post('/api/radar/{order_id}/case', status_code=201, dependencies=[Depends(authorize)])
+def open_radar_case(order_id: str):
+    order = next((o for o in radar.portfolio()['orders'] if o['id'] == order_id), None)
+    if order is None:
+        raise HTTPException(404, 'Order not found.')
+    existing = next((d for d in all_cases() if d.get('source_po') == order_id and d['status'] != 'recovered'), None)
+    if existing:
+        return normalize(existing)
+    return create_case(NewCase(**radar.case_from_order(order)), source_po=order_id)
+
+
+@app.post('/api/ask', dependencies=[Depends(authorize)])
+async def ask_reroute(body: Ask):
+    pf = radar.portfolio()
+    context = radar_context(pf)
+    if body.case_id:
+        d = load_case(body.case_id)[0]
+        context['open_case'] = {
+            'id': d['id'], 'title': d['title'], 'status': d['status'], 'item': d['item'], 'quantity': d['quantity'],
+            'constraints': d['constraints'], 'recommended_id': d.get('recommended_id'), 'summary': d.get('summary', ''),
+            'plans': [{k: p[k] for k in ('id', 'supplier', 'total', 'lead_days', 'certified', 'feasible', 'blockers', 'evidence_id')} for p in d['plans']],
+            'decisions': d.get('decisions', [])[-5:], 'execution': d.get('execution'),
+        }
+    if not provider():
+        return {'answer': f"Live AI is off in demo mode, so here is the rule-based view: {pf['rule_summary']}", 'engine': 'Rule-based demo'}
+    try:
+        async with asyncio.timeout(120):
+            text = await provider().answer(body.question, context)
+    except Exception as exc:
+        log.exception('Ask failed')
+        raise HTTPException(502, str(exc)[:240] if isinstance(exc, ValueError) else 'The AI could not be reached. Try again in a minute.')
+    return {'answer': text[:2000] or 'No answer was returned.', 'engine': provider().model()}
 
 
 @app.get('/api/health')

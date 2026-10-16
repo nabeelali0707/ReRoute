@@ -13,7 +13,7 @@ Material for the one-PDF submission (handbook pages 9–11), plus demo and video
 
 **Project name:** ReRoute
 
-**One-line pitch:** When a supplier fails, ReRoute's agents investigate the disruption and build evidence-backed recovery plans; a human directs and approves the next move, and ReRoute executes and verifies it.
+**One-line pitch:** ReRoute's agents watch every open order, flag supply risks early, and build evidence-backed recovery plans; a human directs and approves the next move, and ReRoute executes and verifies it.
 
 **Problem and who it is for:** Small procurement and operations teams (university labs, workshops, SMEs) lose days when a critical order slips. Someone has to compare stock, delivery times, certifications and budget across suppliers by hand, often under a hard deadline. ReRoute does that groundwork in minutes while keeping the consequential decisions with the people accountable for them.
 
@@ -26,7 +26,7 @@ Material for the one-PDF submission (handbook pages 9–11), plus demo and video
 
 **What we built with:**
 
-- Custom code: React + TypeScript frontend; Python FastAPI backend; LangGraph workflow (investigator → sourcing agent → recovery planner).
+- Custom code: React + TypeScript frontend; Python FastAPI backend; LangGraph workflow (investigator → sourcing agent → recovery planner), plus a Risk Radar with an AI risk analyst and a read-only Ask ReRoute assistant.
 - AI: [TEAM: keep the one you deployed] Groq (`openai/gpt-oss-120b`) or Anthropic Claude (`claude-opus-5-5`). A sourcing agent inspects supplier quotes through a read-only tool and flags missing evidence; a planner chooses among plans that already passed deterministic checks, using structured output. Budget, quantity, deadline and certification rules run in code, so the model cannot approve or pick an infeasible plan.
 - MCP: fastn MCP gateway. After a purchase request is created and read back, ReRoute calls fastn's `execute_tool` to dispatch the approved recovery to the team's connected app (e.g. Slack). [TEAM: name the connector you configured.]
 - Data: SQLite/PostgreSQL via SQLAlchemy. Supplier quotes are clearly labelled synthetic demo data; the workflow, approvals, request ledger and dispatch are real.
@@ -62,14 +62,15 @@ With the live AI, the first recommendation can be Atlas or Northstar; it weighs 
 
 | Time | Show | Say (in your own words) |
 |---|---|---|
-| 0:00–0:40 | Open **Network adapters delayed** | 20 adapters, 3-day deadline, PKR 180,000 budget, original shipment 7 days late. |
+| 0:00–0:50 | **Risk radar** (first screen): risk matrix, High orders, **Run AI risk analysis** | Agents watch every open order; schedule risk = days late ÷ days until needed, plus country signals. The AI analyst ranks what to act on, citing signal IDs; you decide. |
+| 0:50–1:00 | **Start recovery** on PO-2401 | One click turns a flagged order into a recovery case: 20 adapters, 3-day deadline, original shipment 7 days late. |
 | 0:40–1:30 | **Start investigation**; open the Activity tab | Agents retrieved supplier quotes, checked every constraint in code, and the sourcing agent inspected the evidence. |
 | 1:30–2:20 | Options table and **Source evidence** | Atlas is cheapest but has no certification evidence; each option links to its quote. |
 | 2:20–3:10 | **Reject** Atlas, type the reason, **Revise & replan** | Human knowledge redirects the plan; Northstar is now recommended; "How this plan evolved" records why. |
 | 3:10–3:40 | **Approve recovery plan** | Approval is bound to this exact plan version and total. |
 | 3:40–4:40 | **Demo scenario controls → Withdraw**, then **Execute** | Re-check catches the change, the approval is revoked before anything is created, and agents re-plan to Crescent. |
 | 4:40–5:30 | Approve Crescent → **Execute** | Draft request created and read back (PKR 160,000); team notified through fastn. Show the Slack message or sheet row. |
-| 5:30–6:00 | Connections page, activity log | Modes are explicit; failures never fake success; synthetic data is labelled. |
+| 5:30–6:00 | **Ask ReRoute** ("Why was this plan chosen?") and **Recovery report** | The AI explains with quote IDs but cannot act; the report captures every human decision for stakeholders. |
 
 ## Two–three minute video outline
 

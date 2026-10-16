@@ -94,3 +94,23 @@ async def ping():
     client = AsyncAnthropic(timeout=60, max_retries=1)
     response = await ask(client, messages=[{'role': 'user', 'content': 'Reply with the single word OK.'}])
     return f"{model()} replied: {''.join(b.text for b in response.content if b.type == 'text').strip()[:40]}"
+
+
+async def analyze_portfolio(context):
+    from .agents_groq import ANALYST_SYSTEM
+    client = AsyncAnthropic(timeout=90, max_retries=1)
+    ids = [o['id'] for o in context['orders']]
+    schema = {'type': 'object', 'additionalProperties': False, 'required': ['summary', 'priorities'], 'properties': {
+        'summary': {'type': 'string'},
+        'priorities': {'type': 'array', 'items': {'type': 'object', 'additionalProperties': False, 'required': ['id', 'action'],
+                       'properties': {'id': {'type': 'string', 'enum': ids}, 'action': {'type': 'string'}}}}}}
+    response = await ask(client, output_config={'format': {'type': 'json_schema', 'schema': schema}}, system=ANALYST_SYSTEM,
+                         messages=[{'role': 'user', 'content': json.dumps(context)}])
+    return json.loads(next(b.text for b in response.content if b.type == 'text'))
+
+
+async def answer(question, context):
+    from .agents_groq import ASK_SYSTEM
+    client = AsyncAnthropic(timeout=90, max_retries=1)
+    response = await ask(client, system=ASK_SYSTEM, messages=[{'role': 'user', 'content': json.dumps({'context': context, 'question': question})}])
+    return ''.join(b.text for b in response.content if b.type == 'text').strip()

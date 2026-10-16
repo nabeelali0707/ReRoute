@@ -8,6 +8,10 @@ A recovery workspace for investigating procurement disruptions, comparing suppli
 
 ## What works
 
+- **Risk Radar:** monitor every open purchase order, score schedule risk (days late ÷ days until needed) plus country risk signals, plot them on a risk matrix, and get an AI analyst's priorities with signal citations.
+- One click turns a flagged order into a recovery case, prefilled with item, quantity, budget and deadline.
+- **Ask ReRoute:** a read-only chat that answers questions about the order book, risk signals and the open case.
+- **Recovery report:** a printable report (or save as PDF) of the disruption, options, human decisions, outcome and evidence.
 - Report disruptions with item, quantity, budget and delivery constraints.
 - Run a three-stage investigation, sourcing and recovery-planning graph.
 - Compare feasible and blocked options against source evidence.
@@ -46,7 +50,8 @@ The default persistent database is `data/reroute.db` (ignored by Git). PostgreSQ
 
 ## Demo walkthrough
 
-1. Open **Network adapters delayed** (or report a new disruption) and **Start investigation**. Atlas is the cheapest feasible option.
+0. The app opens on **Risk radar**. Point out the risk matrix and the High orders, click **Run AI risk analysis**, then **Start recovery** on PO-2401 (or any High order).
+1. Open **Network adapters delayed** (or the case you just started) and **Start investigation**. Atlas is the cheapest feasible option.
 2. Click **Reject** on Atlas, type why ("Atlas failed our last two compatibility audits"), and **Revise & replan**. Northstar becomes the recommendation; **How this plan evolved** records the redirection.
 3. **Approve recovery plan**.
 4. Open **Demo scenario controls → Withdraw recommended supplier**, then **Execute approved plan**. The execution guard catches the withdrawal, revokes the approval before anything is created, and the agents re-plan: Crescent Tech Traders is now recommended.
