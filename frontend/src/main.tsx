@@ -1,157 +1,160 @@
-import React, { useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { createRoot } from 'react-dom/client';
-import { ArrowUpRight, ArrowRight, Bell, Boxes, Check, CheckCheck, ChevronDown, ChevronRight, CircleHelp, Clock3, Download, FileText, GitBranch, LayoutDashboard, Link2, LoaderCircle, MapPin, Package, Plus, RefreshCw, Search, Settings2, ShieldCheck, Sparkles, Truck, Unplug, X, AlertTriangle, Activity, Radar, MessageSquareText, FileText as ReportIcon, Moon, Sun, Workflow } from 'lucide-react';
-import type { Config, Constraints, RecoveryCase } from './types';
+import { Check, CircleHelp, LoaderCircle, Route, ShieldCheck, X } from 'lucide-react';
+import type { Config, Constraints, Radar as RadarData, RadarAnalysis, RecoveryCase } from './types';
+import { api, authHeaders, getToken, setToken } from './lib';
+import { AppCtx, AskPage, ConnectionsPage, FlowPage, RadarPage, RecoveryPage, ReportForm, ReportView, SECTIONS, SuppliersPage, type Check as CheckResult, type Ctx, type Page } from './pages';
+import { Ic, fmt, mapName, needsAttention, status } from './ui';
 import './styles.css';
-import { api, money, getToken, setToken, authHeaders } from './lib';
-import { RadarView, ReportModal } from './radar';
-import { ChatPage, AgentFlow } from './views';
 
-const statusName: Record<string, string> = { open: 'Needs investigation', investigating: 'Investigating', review: 'Awaiting review', approved: 'Approved', executing: 'Executing', recovered: 'Request verified', blocked: 'Needs attention', error: 'Investigation failed', execution_error: 'Reconciliation needed' };
+const pageFromHash = (): Page => { const p = location.hash.slice(1) as Page; return SECTIONS.some(s => s.id === p) ? p : 'radar'; };
+type Modal = 'report-disruption' | 'report' | 'help' | null;
 
 function App() {
   const [config, setConfig] = useState<Config>();
   const [cases, setCases] = useState<RecoveryCase[]>([]);
+  const [radar, setRadar] = useState<RadarData>();
   const [activeId, setActiveId] = useState('');
-  const [view, setView] = useState('radar');
-  const [theme, setTheme] = useState<string>(() => { try { return localStorage.getItem('reroute-theme') || 'light'; } catch { return 'light'; } });
-  const [reportOpen, setReportOpen] = useState(false);
-  const [tab, setTab] = useState('plans');
-  const [query, setQuery] = useState('');
-  const [error, setError] = useState('');
-  const [toast, setToast] = useState('');
-  const [busy, setBusy] = useState(false);
-  const [loading, setLoading] = useState(true);
-  const [newOpen, setNewOpen] = useState(false);
-  const [help, setHelp] = useState(false);
-  const [tokenInput, setTokenInput] = useState('');
+  const [page, setPage] = useState<Page>(pageFromHash);
+  const [busy, setBusy] = useState<Record<string, boolean>>({});
+  const [toasts, setToasts] = useState<{ id: number; text: string }[]>([]);
+  const [modal, setModal] = useState<Modal>(null);
   const [locked, setLocked] = useState(false);
-  const [selected, setSelected] = useState('');
-  const [constraints, setConstraints] = useState<Constraints>({ budget: 180000, deadline_days: 3, certified_only: false, excluded_suppliers: [] });
-  const [note, setNote] = useState('');
-  const active = cases.find(c => c.id === activeId);
-  const selectedPlan = active?.plans.find(p => p.id === selected);
-  const processing = busy || ['investigating', 'executing'].includes(active?.status || '');
-  const reviewable = !processing && ['review', 'blocked', 'approved'].includes(active?.status || '');
-  const constraintsChanged = !!active && JSON.stringify(constraints) !== JSON.stringify(active.constraints);
-  function toggleReject(id: string) {
-    const excluded = constraints.excluded_suppliers.includes(id) ? constraints.excluded_suppliers.filter(x => x !== id) : [...constraints.excluded_suppliers, id];
-    setConstraints({ ...constraints, excluded_suppliers: excluded });
-    if (excluded.includes(id) && selected === id) setSelected('');
-  }
-  const providerName = config?.agent_mode === 'groq' ? 'Groq' : 'Claude';
-  const [checks, setChecks] = useState<{ name: string; ok: boolean; detail: string }[] | null>(null);
-  async function runChecks() { setBusy(true); setChecks(null); try { setChecks(await api('/diagnostics', {})); } catch (e) { setError((e as Error).message); } finally { setBusy(false); } }
-  const supplierName = (id: string) => active?.plans.find(p => p.id === id)?.supplier || id;
+  const [loading, setLoading] = useState(true);
+  const [loginError, setLoginError] = useState('');
+  const [tokenInput, setTokenInput] = useState('');
+  const [country, setCountry] = useState<string | null>(null);
+  const active = cases.find(c => c.id === activeId) || cases[0];
 
-  function updateCase(d: RecoveryCase) { setCases(old => old.some(c => c.id === d.id) ? old.map(c => c.id === d.id && Date.parse(d.updated_at) >= Date.parse(c.updated_at) ? d : c) : [d, ...old]); }
+  const toast = useCallback((text: string) => { const id = Date.now() + Math.random(); setToasts(t => [...t, { id, text }].slice(-3)); setTimeout(() => setToasts(t => t.filter(x => x.id !== id)), 3200); }, []);
+  const mark = (key: string, on: boolean) => setBusy(b => ({ ...b, [key]: on }));
+  const updateCase = useCallback((d: RecoveryCase) => setCases(old => (old.some(c => c.id === d.id) ? old.map(c => (c.id === d.id && Date.parse(d.updated_at) >= Date.parse(c.updated_at) ? d : c)) : [d, ...old])), []);
+  const refreshRadar = useCallback(() => api<RadarData>('/radar').then(setRadar).catch(() => undefined), []);
+
   async function load() {
     setLoading(true);
     try {
       const c = await api<Config>('/config'); setConfig(c);
       if (c.auth_required && !getToken()) { setLocked(true); return; }
-      const all = await api<RecoveryCase[]>('/cases'); setCases(all); setActiveId(old => old || all[0]?.id || ''); setLocked(false); setError('');
-    } catch (e) { setError((e as Error).message); setLocked(true); }
+      const [all] = await Promise.all([api<RecoveryCase[]>('/cases'), refreshRadar()]);
+      setCases(all); setActiveId(old => old || all[0]?.id || ''); setLocked(false); setLoginError('');
+    } catch (e) { setLocked(true); setLoginError((e as Error).message); setToken(''); }
     finally { setLoading(false); }
   }
   useEffect(() => { void load(); }, []);
-  useEffect(() => { document.documentElement.dataset.theme = theme; try { localStorage.setItem('reroute-theme', theme); } catch { /* storage unavailable */ } }, [theme]);
+  useEffect(() => { const onHash = () => { setPage(pageFromHash()); window.scrollTo(0, 0); }; window.addEventListener('hashchange', onHash); return () => window.removeEventListener('hashchange', onHash); }, []);
+  useEffect(() => { document.title = `${SECTIONS.find(s => s.id === page)!.name} · ReRoute`; }, [page]);
+  useEffect(() => { const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setModal(null); }; window.addEventListener('keydown', onKey); return () => window.removeEventListener('keydown', onKey); }, []);
+  // Live updates for the open case (server-sent events), so agent progress appears without refreshing.
   useEffect(() => {
-    if (active) { setConstraints(active.constraints); setSelected(active.approval?.plan_id || active.recommended_id || ''); setNote(''); }
-  }, [activeId, active?.version]);
-  useEffect(() => { if (toast) { const timer = setTimeout(() => setToast(''), 4500); return () => clearTimeout(timer); } }, [toast]);
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') { setNewOpen(false); setHelp(false); setReportOpen(false); } };
-    window.addEventListener('keydown', onKey); return () => window.removeEventListener('keydown', onKey);
-  }, []);
-  useEffect(() => {
-    if (!activeId || locked) return;
+    if (!active?.id || locked) return;
     const controller = new AbortController();
-    async function stream() {
+    (async () => {
       try {
-        const response = await fetch(`/api/cases/${activeId}/events`, { headers: authHeaders(), signal: controller.signal });
-        if (!response.ok || !response.body) return;
-        const reader = response.body.getReader(); const decoder = new TextDecoder(); let pending = '';
-        while (true) {
-          const { done, value } = await reader.read(); if (done) break;
-          pending += decoder.decode(value, { stream: true });
-          const chunks = pending.split('\n\n'); pending = chunks.pop() || '';
-          for (const chunk of chunks) if (chunk.startsWith('data: ')) updateCase(JSON.parse(chunk.slice(6)));
-        }
-      } catch { /* Request failures surface on the next user operation. */ }
-    }
-    void stream(); return () => controller.abort();
-  }, [activeId, locked]);
+        const res = await fetch(`/api/cases/${active.id}/events`, { headers: authHeaders(), signal: controller.signal });
+        if (!res.ok || !res.body) return;
+        const reader = res.body.getReader(), decoder = new TextDecoder(); let pending = '';
+        for (;;) { const { done, value } = await reader.read(); if (done) break; pending += decoder.decode(value, { stream: true }); const chunks = pending.split('\n\n'); pending = chunks.pop() || ''; for (const chunk of chunks) if (chunk.startsWith('data: ')) updateCase(JSON.parse(chunk.slice(6))); }
+      } catch { /* the next user action reports any failure */ }
+    })();
+    return () => controller.abort();
+  }, [active?.id, locked]);
 
-  async function action(path: string, body = {}, message = '') {
-    if (!active) return;
-    setBusy(true); setError('');
-    try { const d = await api<RecoveryCase>(`/cases/${active.id}/${path}`, body); updateCase(d); setSelected(d.approval?.plan_id || d.recommended_id || ''); if (message) setToast(message); }
-    catch (e) { setError((e as Error).message); }
-    finally { setBusy(false); }
+  const go = (p: Page) => { if (location.hash.slice(1) !== p) location.hash = p; else setPage(p); };
+  async function run(key: string, fn: () => Promise<void>) {
+    mark(key, true);
+    try { await fn(); } catch (e) { toast((e as Error).message); } finally { mark(key, false); }
   }
-  function exportCase() {
-    if (!active) return;
-    const blob = new Blob([JSON.stringify(active, null, 2)], { type: 'application/json' });
-    const href = URL.createObjectURL(blob); const a = document.createElement('a'); a.href = href; a.download = `${active.id}-evidence.json`; a.click(); URL.revokeObjectURL(href);
-    setToast('Case evidence exported.');
+  const caseAction = (path: string, body: unknown = {}) => api<RecoveryCase>(`/cases/${active!.id}/${path}`, body);
+
+  const ctx: Ctx = {
+    page, config, cases, active, radar, busy, country, toast, go,
+    setCountry: c => setCountry(c ? mapName(c) : null),
+    setActive: id => setActiveId(id),
+    openModal: m => setModal(m),
+    exportCase: () => {
+      if (!active) return;
+      const href = URL.createObjectURL(new Blob([JSON.stringify(active, null, 2)], { type: 'application/json' }));
+      const a = document.createElement('a'); a.href = href; a.download = `${active.id}-evidence.json`; a.click(); URL.revokeObjectURL(href);
+      toast(`${active.id} exported`);
+    },
+    investigate: () => run(active!.id, async () => { const d = await caseAction('investigate'); updateCase(d); toast(d.status === 'error' ? 'Investigation failed. See the banner for the reason.' : d.status === 'blocked' ? 'No supplier meets every constraint' : 'Recovery options ready'); }),
+    revise: (constraints: Constraints, note: string) => run(active!.id, async () => { const d = await caseAction('decision', { version: active!.version, action: 'revise', constraints, note }); updateCase(d); toast(d.status === 'error' ? 'Replan failed. See the banner for the reason.' : `Plan version ${d.version} ready`); }),
+    approve: (planId: string) => run(active!.id, async () => {
+      const approved = await caseAction('decision', { version: active!.version, action: 'approve', plan_id: planId, note: '' }); updateCase(approved);
+      const d = await caseAction('execute', { version: approved.version }); updateCase(d);
+      toast(d.status === 'recovered' ? `${d.execution?.id} verified · PKR ${fmt(d.execution?.total || 0)}` : d.alert ? 'Supplier conditions changed. Your agents re-planned.' : status(d.status).word);
+      void refreshRadar();
+    }),
+    reconcile: () => run(active!.id, async () => { const d = await caseAction('execute', { version: active!.version }); updateCase(d); toast(d.status === 'recovered' ? `${d.execution?.id} verified` : status(d.status).word); }),
+    withdraw: (supplierId: string) => run(active!.id, async () => { const d = await caseAction(`withdraw/${supplierId}`); updateCase(d); toast('Synthetic withdrawal recorded. Approve to see the execution guard.'); }),
+    redispatch: (confirm: boolean) => run(active!.id, async () => { const d = await caseAction('dispatch', { confirm_resend: confirm }); updateCase(d); toast(`Notification ${d.dispatch?.status}`); }),
+    startRecovery: (orderId: string) => run(orderId, async () => {
+      const existing = radar?.linked_cases[orderId];
+      const d = await api<RecoveryCase>(`/radar/${orderId}/case`, {}); updateCase(d); setActiveId(d.id);
+      if (!existing) toast(`${d.id} opened for ${orderId}`);
+      void refreshRadar(); go('recovery');
+    }),
+    analyze: () => run('analysis', async () => { const a = await api<RadarAnalysis>('/radar/analyze', {}); setRadar(r => r && { ...r, analysis: a }); toast('Risk analysis updated'); }),
+    runChecks: async () => {
+      mark('checks', true); const t0 = performance.now();
+      try { const r = await api<{ name: string; ok: boolean; detail: string }[]>('/diagnostics', {}); const ms = Math.round(performance.now() - t0); return r.map(x => ({ ...x, ms })) as CheckResult[]; }
+      catch (e) { return [{ name: 'Connection check', ok: false, detail: (e as Error).message, ms: Math.round(performance.now() - t0) }]; }
+      finally { mark('checks', false); }
+    },
+    disconnect: () => { setToken(''); setLocked(true); setCases([]); setRadar(undefined); },
+  };
+
+  async function createDisruption(v: { order: string; title: string; disruption: string; budget: number; days: number }) {
+    const o = radar?.orders.find(x => x.id === v.order);
+    await run('create', async () => {
+      const d = await api<RecoveryCase>('/cases', { title: v.title, item: o?.item, quantity: o?.quantity, location: o?.destination, disruption: v.disruption, source_po: o?.id, constraints: { budget: v.budget, deadline_days: v.days, certified_only: false, excluded_suppliers: [] } });
+      updateCase(d); setActiveId(d.id); setModal(null); toast(`${d.id} reported`); void refreshRadar(); go('recovery');
+    });
   }
-  async function create(e: React.FormEvent<HTMLFormElement>) {
-    e.preventDefault(); const form = new FormData(e.currentTarget); setBusy(true); setError('');
-    try {
-      const d = await api<RecoveryCase>('/cases', { title: form.get('title'), item: form.get('item'), quantity: Number(form.get('quantity')), location: form.get('location'), disruption: form.get('disruption'), constraints: { budget: Number(form.get('budget')), deadline_days: Number(form.get('deadline')), certified_only: false } });
-      updateCase(d); setActiveId(d.id); setView('workspace'); setTab('plans'); setNewOpen(false); setToast('Disruption reported. Ready to investigate.');
-    } catch (e) { setError((e as Error).message); } finally { setBusy(false); }
+  function copySummary(c: RecoveryCase) {
+    const lines = [`ReRoute recovery report — ${c.title} (${c.id})`, `Status: ${status(c.status).word}`, '', `Disruption: ${c.disruption}`, `Need: ${c.quantity} × ${c.item} to ${c.location}. Budget PKR ${fmt(c.constraints.budget)}, ${c.constraints.deadline_days} days.`, '', `Recommendation: ${c.summary || 'none yet'}`, '', 'Options:', ...c.plans.map(o => `- ${o.supplier}: PKR ${fmt(o.total)}, ${o.lead_days} days, ${o.feasible ? 'meets constraints' : o.blockers.join('; ')}`), ...(c.execution ? ['', `Verified draft request ${c.execution.id} for PKR ${fmt(c.execution.total)}.`] : [])];
+    navigator.clipboard?.writeText(lines.join('\n')).then(() => toast('Report summary copied')).catch(() => toast('Your browser blocked the clipboard. Use Print / PDF instead.'));
   }
 
-  const attention = cases.filter(c => c.status !== 'recovered').length;
-  return <div className="app-shell">
-
-    <div className="main-shell">
-      <header className="topbar"><a className="brand" href="#" onClick={e => { e.preventDefault(); setView('radar'); }}><span className="brand-mark"><GitBranch size={20}/></span>ReRoute</a><nav aria-label="Main navigation" className="top-nav"><button className={view === 'radar' ? 'nav active' : 'nav'} aria-current={view === 'radar' ? 'page' : undefined} onClick={() => setView('radar')}><Radar size={16}/>Risk radar</button><button className={view === 'workspace' ? 'nav active' : 'nav'} aria-current={view === 'workspace' ? 'page' : undefined} onClick={() => setView('workspace')}><LayoutDashboard size={16}/>Recovery<span className="nav-count">{attention}</span></button><button className={view === 'chat' ? 'nav active' : 'nav'} aria-current={view === 'chat' ? 'page' : undefined} onClick={() => setView('chat')}><MessageSquareText size={16}/>Ask ReRoute</button><button className={view === 'activity' ? 'nav active' : 'nav'} aria-current={view === 'activity' ? 'page' : undefined} onClick={() => setView('activity')}><Workflow size={16}/>Agent flow</button><button className={view === 'suppliers' ? 'nav active' : 'nav'} aria-current={view === 'suppliers' ? 'page' : undefined} onClick={() => setView('suppliers')}><Boxes size={16}/>Suppliers</button><button className={view === 'integrations' ? 'nav active' : 'nav'} aria-current={view === 'integrations' ? 'page' : undefined} onClick={() => setView('integrations')}><Link2 size={16}/>Connections</button></nav><div className="topbar-right"><span className="mode-pill"><i/>{config?.tool_mode === 'fastn' ? 'Connected tools' : 'Demo environment'}</span><button className="icon-button" aria-label={theme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'} title="Toggle theme" onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')}>{theme === 'dark' ? <Sun size={18}/> : <Moon size={18}/>}</button><button className="icon-button" aria-label="Help" onClick={() => setHelp(true)}><CircleHelp size={19}/></button></div></header>
-      <main>
-        <div className="page-heading"><div><div className="eyebrow">SUPPLY CHAIN RESILIENCE</div><h1>{view === 'radar' ? 'See trouble before it arrives.' : view === 'chat' ? 'Ask ReRoute.' : view === 'workspace' ? 'Keep your next move clear.' : view === 'suppliers' ? 'Your recovery network.' : view === 'activity' ? 'Watch your agents work.' : 'Connect the dots.'}</h1><p>{view === 'radar' ? 'Your agents watch every open order and flag risks early. You decide which ones to act on.' : view === 'chat' ? 'Ask about your orders, risks and recovery cases. The AI explains; you decide.' : view === 'workspace' ? 'Turn disruptions into decisions. Your recovery team is ready.' : view === 'suppliers' ? 'Inspect the supplier evidence behind your recovery options.' : view === 'activity' ? 'Every agent step, human decision and output for the selected case.' : 'Know where your evidence comes from and where actions go.'}</p></div><button className="primary" onClick={() => setNewOpen(true)} disabled={locked}><Plus size={17}/>Report disruption</button></div>
-        {error && <div className="error-banner" role="alert"><AlertTriangle size={18}/>{error}<button aria-label="Dismiss error" onClick={() => setError('')}><X size={16}/></button></div>}
-        {locked ? <form className="login-card panel" onSubmit={e => { e.preventDefault(); setToken(tokenInput); void load(); }}><ShieldCheck size={30}/><h2>Open your workspace</h2><p>Enter the operator token configured on the server.</p><label>Workspace token<input type="password" required value={tokenInput} onChange={e => setTokenInput(e.target.value)} autoComplete="current-password"/></label><button className="primary">Connect workspace</button></form> : loading ? <div className="loading"><LoaderCircle className="spin"/>Loading your workspace…</div> : <>
-        {view !== 'radar' && view !== 'chat' && <section className="metrics" aria-label="Workspace summary"><Metric icon={<Package size={19}/>} label="Open disruptions" value={String(attention).padStart(2, '0')} foot="Across your recovery workspace"/><Metric icon={<ShieldCheck size={19}/>} label="Awaiting your decision" value={String(cases.filter(c => c.status === 'review').length).padStart(2, '0')} foot="Human judgment makes the difference"/><Metric icon={<CheckCheck size={19}/>} label="Verified requests" value={String(cases.filter(c => c.status === 'recovered').length).padStart(2, '0')} foot="Draft requests confirmed in the ledger"/></section>}
-
-        {view === 'chat' ? <ChatPage cases={cases} initialCaseId={active?.id} onOpenCase={id => { setActiveId(id); setView('workspace'); }}/> : view === 'radar' ? <RadarView config={config} onError={setError} onOpenCase={d => { updateCase(d); setActiveId(d.id); setView('workspace'); setTab('plans'); setToast(`Recovery case ${d.id} ready. Start the investigation.`); }}/> : view === 'integrations' ? <section className="connections-grid"><Connection name="Reasoning engine" icon={<Sparkles/>} state={config?.agent_mode === 'demo' ? 'Deterministic demo' : `${providerName} · ${config?.model}`} text={config?.agent_mode !== 'demo' ? `${providerName} model ${config?.model}. The sourcing agent inspects quote evidence; the planner recommends a validated option. Access is confirmed only by a successful run.` : 'LangGraph coordinates three workflow roles. Demo planning uses explicit rules, without an LLM call.'}/><Connection name="Operational tools" icon={<Link2/>} state={config?.tool_mode === 'fastn' ? 'fastn MCP configured' : 'Local demo adapter'} text={config?.tool_mode === 'fastn' ? 'Evidence retrieval and request creation use the configured MCP contracts. Inspect activity for operation results.' : 'Synthetic supplier quotes and a persistent local request ledger. No supplier is contacted and no money is transferred.'}/><Connection name="Recovery dispatch" icon={<ArrowUpRight/>} state={config?.dispatch_mode === 'fastn' ? `fastn · ${config.dispatch_label}` : 'Not configured'} text={config?.dispatch_mode === 'fastn' ? 'After a request is verified, ReRoute runs your configured fastn connector action (execute_tool) to notify or update your team’s system. The connector response is stored as evidence; failures never undo the verified request.' : 'Set DISPATCH_MODE=fastn with a fastn API key, project and connector action to notify Slack, update a sheet or open a ticket once a recovery is verified.'}/><Connection name="Human approval" icon={<ShieldCheck/>} state="Enforced on the server" text="Approvals belong to one plan version. Changes to price or availability invalidate approval before execution."/><Connection name="Workspace access" icon={<Settings2/>} state={config?.auth_required ? 'Operator token enabled' : 'Open demo mode'} text="Live modes require a configured workspace token. Provider keys remain on the backend and are never sent to this browser."/><div className="panel integration-note"><strong>Ready for your own systems</strong><p>This screen reports configuration. Run a connection check to make one small real call to each live provider before you demo.</p><button className="secondary" disabled={busy} onClick={() => void runChecks()}>{busy ? <LoaderCircle size={15} className="spin"/> : <Activity size={15}/>}Run connection check</button>{checks && <ul className="check-list" aria-label="Connection check results">{checks.map(c => <li key={c.name} className={c.ok ? 'ok' : 'fail'}>{c.ok ? <Check size={15}/> : <AlertTriangle size={15}/>}<span><strong>{c.name}</strong>{c.detail}</span></li>)}</ul>}{getToken() && <button className="secondary" onClick={() => { setToken(''); setLocked(true); }}>Disconnect this browser</button>}</div></section> : <>
-        <div className="section-heading"><h2>{view === 'workspace' ? 'Recovery workspace' : 'Select a disruption'} <span className="count-badge">{cases.length}</span></h2><label className="search"><Search size={16}/><input aria-label="Search disruptions" placeholder="Search disruptions…" value={query} onChange={e => setQuery(e.target.value)}/></label></div>
-        <div className="case-strip">{cases.filter(c => `${c.title} ${c.id}`.toLowerCase().includes(query.toLowerCase())).map(c => <button key={c.id} className={`case-selector ${c.id === activeId ? 'selected' : ''}`} onClick={() => setActiveId(c.id)}><span className={`case-dot ${c.status === 'recovered' ? 'green' : ''}`}/><span><strong>{c.title}</strong><small>{c.id} · {statusName[c.status]}</small></span><ChevronRight size={16}/></button>)}{!cases.filter(c => `${c.title} ${c.id}`.toLowerCase().includes(query.toLowerCase())).length && <p className="muted">No matching disruptions. Report a new one to get started.</p>}</div>
-
-        {active && (view === 'suppliers' ? <section className="supplier-grid">{active.suppliers.length ? active.suppliers.map(s => <div className="panel supplier-panel" key={s.id}><div className="supplier-logo">{s.name.slice(0, 1)}</div><h3>{s.name}</h3><p><MapPin size={14}/>{s.location}</p><div className="supplier-facts"><span>Unit price<strong>PKR {money(s.unit_price)}</strong></span><span>Stock<strong>{s.stock} units</strong></span><span>Delivery<strong>{s.lead_days} days</strong></span></div><span className={`badge ${s.certified ? 'success' : 'warning'}`}>{s.certified ? 'Certification in evidence' : 'Certification not provided'}</span><p className="evidence-copy">{s.evidence}</p><small className="mono">{s.evidence_id}</small>{active.withdrawn_suppliers.includes(s.id) && <p className="danger">Availability withdrawn in this scenario.</p>}</div>) : <Empty title="Investigate to discover suppliers" text="Supplier evidence will appear after the first investigation." action={() => { setView('workspace'); }} label="Back to recovery"/>}</section> : view === 'activity' ? <><AgentFlow data={active}/><section className="panel full-activity"><div className="panel-heading"><h3>Full activity log · {active.id}</h3><button className="secondary small" onClick={exportCase}><Download size={15}/>Export evidence</button></div><Timeline data={active}/></section></> : <div className="workspace-grid"><div className="workspace-main">
-          <section className="panel incident-card"><div className="incident-top"><span className="case-ref"><span className="tiny-square"/>{active.id}</span><span className={`badge ${active.status === 'recovered' ? 'success' : 'warning'}`}><span className="badge-dot"/>{statusName[active.status]}</span></div><h2>{active.title}</h2><p className="incident-description">{active.disruption}</p><div className="incident-details"><div><Package size={16}/><span>{active.quantity} units<small>{active.item}</small></span></div><div><MapPin size={16}/><span>{active.location.split(' · ')[0]}<small>{active.location.split(' · ')[1] || 'Delivery location'}</small></span></div><div><Clock3 size={16}/><span>{active.constraints.deadline_days}-day deadline<small>Maximum lead time</small></span></div><div><span className="currency-icon">Rs</span><span>{money(active.constraints.budget)}<small>Budget · PKR</small></span></div></div>
-          <div className="workflow-track">{['Investigate', 'Find alternatives', 'Human review', 'Execute & verify'].map((label, i) => { const progress = active.status === 'recovered' ? 4 : ['approved', 'executing', 'execution_error'].includes(active.status) ? 3 : active.plans.length ? 2 : 0; return <React.Fragment key={label}><div className={`workflow-step ${i < progress ? 'done' : i === progress ? 'current' : ''}`}><span>{i < progress ? <Check size={12}/> : i + 1}</span>{label}</div>{i < 3 && <div className="step-line"/>}</React.Fragment>; })}</div></section>
-
-          {active.alert && <div className="replan-alert" role="status"><AlertTriangle size={18}/><div><strong>{active.alert.title}</strong><p>{active.alert.detail}</p></div></div>}
-          {active.summary && <div className="recommendation"><div className="spark-box"><Sparkles size={18}/></div><div><strong>{active.status === 'blocked' ? 'A new decision is needed' : 'Your recovery brief'}</strong><p>{active.summary}</p><small>{config?.agent_mode === 'demo' ? 'Rule-based demo planner' : `${providerName} planner`} · Plan version {active.version} · Evidence-backed constraints</small></div></div>}
-
-          <section className="panel options-panel"><div className="tabs"><button className={tab === 'plans' ? 'tab active' : 'tab'} onClick={() => setTab('plans')}>Recovery options <span>{active.plans.length}</span></button><button className={tab === 'evidence' ? 'tab active' : 'tab'} onClick={() => setTab('evidence')}>Source evidence</button><button className={tab === 'history' ? 'tab active' : 'tab'} onClick={() => setTab('history')}>Activity</button></div>
-          {tab === 'plans' ? active.plans.length ? <><div className="table-caption"><p>Compare the tradeoffs. Choose the next move.</p><span>All costs in PKR</span></div><div className="table-scroll"><table><thead><tr><th>Supplier / plan</th><th>Total cost</th><th>Arrival</th><th>Assessment</th><th><span className="sr-only">Select</span></th><th><span className="sr-only">Reject</span></th></tr></thead><tbody>{active.plans.map(p => { const pendingReject = constraints.excluded_suppliers.includes(p.id) && !active.constraints.excluded_suppliers.includes(p.id); return <tr key={p.id} className={`${selected === p.id ? 'chosen' : ''} ${!p.feasible ? 'infeasible' : ''} ${pendingReject ? 'pending-reject' : ''}`}><td><div className="supplier-cell"><span className="mini-logo">{p.supplier[0]}</span><span><strong>{p.supplier}</strong><small>{p.location}{p.id === active.recommended_id && <em>Recommended</em>}</small></span></div></td><td><strong>{money(p.total)}</strong><small>{p.savings >= 0 ? `${money(p.savings)} under budget` : `${money(-p.savings)} over budget`}</small></td><td><span className="delivery"><Truck size={14}/>{p.lead_days} day{p.lead_days !== 1 ? 's' : ''}</span></td><td><span className={`assessment ${p.feasible ? 'ok' : ''}`}>{p.feasible ? <><Check size={14}/>Meets constraints</> : <><AlertTriangle size={13}/>Blocked</>}</span><small>{pendingReject ? 'Rejection pending — replan to apply' : p.feasible ? p.certified ? 'Certification provided' : 'Certification not provided' : p.blockers.join(' · ')}</small></td><td><input type="radio" aria-label={`Select ${p.supplier}`} name="plan" checked={selected === p.id} disabled={!p.feasible || pendingReject || processing || !['review', 'approved'].includes(active.status)} onChange={() => setSelected(p.id)}/></td><td><button type="button" className={`reject-button ${constraints.excluded_suppliers.includes(p.id) ? 'undo' : ''}`} disabled={!reviewable} aria-label={`${constraints.excluded_suppliers.includes(p.id) ? 'Restore' : 'Reject'} ${p.supplier}`} onClick={() => toggleReject(p.id)}>{constraints.excluded_suppliers.includes(p.id) ? <><RefreshCw size={12}/>Restore</> : <><X size={12}/>Reject</>}</button></td></tr>; })}</tbody></table></div><div className="table-footer"><ShieldCheck size={14}/>Availability is checked again before execution.<button onClick={() => setTab('evidence')}>Inspect evidence <ArrowUpRight size={13}/></button></div></> : <Empty title={processing ? 'Your recovery team is investigating' : active.status === 'blocked' ? 'Conditions changed. Let’s find another way.' : 'A disruption is just the starting point.'} text={processing ? 'Gathering supplier evidence and checking your constraints.' : 'Investigate this case to compare suppliers, delivery times and recovery costs.'} action={() => void action('investigate')} label={active.version ? 'Re-investigate' : 'Start investigation'} busy={processing}/> : tab === 'evidence' ? <div className="evidence-list">{active.sourcing_review && <div className="sourcing-review"><strong>Agent evidence review</strong><p>{active.sourcing_review}</p></div>}{active.suppliers.length ? active.suppliers.map(s => <details key={s.id} open><summary><FileText size={16}/><strong>{s.evidence_id}</strong><span>{s.name}</span><ChevronDown size={15}/></summary><p>{s.evidence}</p><small>Source: {active.evidence_source}</small></details>) : <p>No evidence retrieved yet.</p>}</div> : <Timeline data={active}/>}</section>
-
-          {active.execution && <section className="verified panel"><span className="verified-icon"><CheckCheck size={25}/></span><div><h3>Recovery request verified.</h3><p>{active.execution.id} · PKR {money(active.execution.total)} · Saved as a draft</p><small>Destination read-back matches your approval. Delivery is not yet confirmed.</small>{active.dispatch && <div className={`dispatch-line ${active.dispatch.status}`}>{active.dispatch.status === 'sent' ? <><CheckCheck size={14}/>Team notified via {active.dispatch.label} · fastn</> : active.dispatch.status === 'sending' ? <><LoaderCircle size={14} className="spin"/>Notifying {active.dispatch.label}…</> : <><AlertTriangle size={14}/>{active.dispatch.status === 'unknown' ? `Notification to ${active.dispatch.label} may not have been delivered. Check it before resending.` : `Notification failed: ${active.dispatch.error}`}<button className="secondary small" disabled={busy} onClick={() => void action('dispatch', { confirm_resend: active.dispatch?.status === 'unknown' }, 'Recovery dispatched.')}>{active.dispatch.status === 'unknown' ? 'Confirm & resend' : 'Retry'}</button></>}</div>}</div><button className="icon-button" onClick={exportCase} aria-label="Export verified case"><Download size={19}/></button></section>}
-          <div className="data-note"><span className="badge-dot"/>{config?.tool_mode === 'demo' ? 'Demonstration data. Suppliers, prices and stock are synthetic.' : 'Connected supplier data. Inspect source evidence before approving.'}<button onClick={() => setReportOpen(true)}><ReportIcon size={13}/>Recovery report</button><button onClick={exportCase}><Download size={13}/>Export case</button></div>
-        </div><aside className="review-column"><section className="panel review-panel"><div className="panel-heading"><h3><ShieldCheck size={18}/>Decision desk</h3><span className="live-dot"/></div><div className="review-intro"><span className="eyebrow">HUMAN + AI, TOGETHER</span><h3>You set the direction.</h3><p>Review the evidence, adjust your constraints, and approve the plan you trust.</p></div><form onSubmit={e => { e.preventDefault(); void action('decision', { version: active.version, action: 'revise', constraints, note }, 'Recovery plan revised.'); }}><label>Total budget <span>PKR</span><input aria-label="Total budget" type="number" min={1} max={100000000} required value={constraints.budget} onChange={e => setConstraints({ ...constraints, budget: Number(e.target.value) })}/></label><label>Delivery within <span>days</span><input aria-label="Delivery within" type="number" min={1} max={90} required value={constraints.deadline_days} onChange={e => setConstraints({ ...constraints, deadline_days: Number(e.target.value) })}/></label><label className="checkbox-label"><input type="checkbox" checked={constraints.certified_only} onChange={e => setConstraints({ ...constraints, certified_only: e.target.checked })}/><span>Require certified compatibility<small>Exclude unverified substitutes</small></span></label>{constraints.excluded_suppliers.length > 0 && <div className="rejected-list"><span>Rejected suppliers</span>{constraints.excluded_suppliers.map(id => <button type="button" key={id} className="chip" disabled={!reviewable} aria-label={`Restore ${supplierName(id)}`} onClick={() => toggleReject(id)}>{supplierName(id)}<X size={11}/></button>)}</div>}<label>Instructions for your agents<textarea aria-label="Instructions for your agents" placeholder={constraints.excluded_suppliers.length ? 'Why are you rejecting this supplier? Your agents use this reasoning when they replan.' : 'e.g. This lab requires certified components. Find a compatible alternative.'} maxLength={2000} value={note} onChange={e => setNote(e.target.value)}/></label><button className="secondary full" disabled={!reviewable || !note.trim()}><RefreshCw size={15}/>Revise & replan</button>{constraintsChanged && !note.trim() && <small className="hint">Add a reason so your agents (and the audit trail) know why.</small>}</form>
-          <div className="approval-area">{active.status === 'recovered' ? <p className="approved-note"><CheckCheck size={16}/>Approved action verified</p> : ['approved', 'execution_error'].includes(active.status) ? <><p className="approved-note"><Check size={16}/>Version {active.version} approved</p><button className="primary full" disabled={processing} onClick={() => void action('execute', { version: active.version })}>{processing ? <LoaderCircle className="spin" size={16}/> : <ArrowRight size={16}/>} {active.status === 'execution_error' ? 'Reconcile & retry' : 'Execute approved plan'}</button><small>Creates a draft request. No payment is sent.</small></> : <><div className="approval-total"><span>Selected recovery plan</span><strong>{selectedPlan ? `PKR ${money(selectedPlan.total)}` : 'Choose a plan'}</strong></div><button className="primary full" disabled={processing || active.status !== 'review' || !selectedPlan?.feasible || constraintsChanged} onClick={() => void action('decision', { version: active.version, action: 'approve', plan_id: selected, note }, 'Plan approved. Ready for execution.')}><ShieldCheck size={16}/>Approve recovery plan</button><small>{constraintsChanged ? 'Replan to apply your changed constraints first.' : 'Approval applies only to this plan version.'}</small></>}</div></section>
-          {active.decisions.length > 0 && <section className="panel decision-history" aria-label="Decision history"><div className="panel-heading"><h3><GitBranch size={16}/>How this plan evolved</h3></div><ol>{active.decisions.map((x, i) => <li key={i} className={x.action}><span className="decision-tag">{x.action === 'approved' ? 'Approved' : x.action === 'revised' ? 'Redirected' : 'Invalidated'} · v{x.version}</span>{x.action === 'revised' ? <p>{x.rejected?.length ? <>Rejected <strong>{x.rejected.join(', ')}</strong>. </> : x.previous_recommendation ? <>Moved away from <strong>{x.previous_recommendation}</strong>. </> : null}{x.changes?.join(' · ')}{x.changes?.length ? '. ' : ''}<em>“{x.note}”</em></p> : x.action === 'approved' ? <p><strong>{x.supplier}</strong> · PKR {money(x.total || 0)}{x.note ? <> · <em>“{x.note}”</em></> : null}</p> : <p><strong>{x.supplier}</strong>: {x.note}. Nothing was created.</p>}</li>)}</ol></section>}
-          <section className="team-panel"><h4>Your recovery team</h4>{[['Investigator', 'Scopes the disruption'], ['Sourcing agent', 'Checks alternatives'], ['Recovery planner', 'Builds the next move']].map(([name, role], i) => <div className="team-member" key={name}><span className={`agent-avatar a${i}`}><GitBranch size={16}/></span><div><strong>{name}</strong><small>{role}</small></div>{active.plans.length ? <Check size={14} className="green-text"/> : <span className="waiting-dot"/>}</div>)}<p>{config?.agent_mode === 'demo' ? 'Demo workflow · deterministic planning' : `LangGraph workflow · ${providerName} agents`}</p></section>
-          {config?.tool_mode === 'demo' && active.recommended_id && ['review', 'approved'].includes(active.status) && <details className="scenario-control"><summary><Settings2 size={14}/>Demo scenario controls<ChevronDown size={13}/></summary><p>Simulate a supplier withdrawing after planning. Execution will catch the change.</p><button className="secondary small" disabled={processing || active.withdrawn_suppliers.includes(active.recommended_id)} onClick={() => void action(`withdraw/${active.recommended_id}`, {}, 'Synthetic withdrawal recorded.')}><Unplug size={14}/>Withdraw recommended supplier</button></details>}
-        </aside></div>)}
-        </>}
-        <footer><span><GitBranch size={14}/>ReRoute <span className="footer-separator">/</span> Find the next move.</span><span>Built for Human + AI collaboration.</span></footer>
-        </>}
+  const attention = cases.filter(needsAttention).length;
+  const Shell = useMemo(() => ({ radar: RadarPage, recovery: RecoveryPage, flow: FlowPage, suppliers: SuppliersPage, connections: ConnectionsPage })[page as Exclude<Page, 'ask'>], [page]);
+  return <AppCtx.Provider value={ctx}>
+    <div className="app rr">
+      <nav className="rail rr-rail rr-panel" aria-label="Sections">
+        <span className="mark tip" data-tip="ReRoute" aria-hidden="true"><Ic as={Route}/></span>
+        {SECTIONS.map(s => <a key={s.id} href={`#${s.id}`} className="rr-rail__btn tip" data-tip={s.name} aria-label={s.name} aria-current={page === s.id ? 'page' : undefined}><Ic as={s.icon}/>{s.id === 'recovery' && attention > 0 && <span className="rr-count">{attention}</span>}</a>)}
+        <span className="spacer"/><span className="rr-rail__sep"/>
+        <button className="rr-rail__btn tip help" data-tip="How ReRoute works" aria-label="How ReRoute works" onClick={() => setModal('help')}><Ic as={CircleHelp}/></button>
+      </nav>
+      <main className="main">
+        {locked ? <section className="rr-panel login" aria-labelledby="login-title">
+          <span className="ai-ic"><Ic as={ShieldCheck}/></span><h1 id="login-title">Open your workspace</h1><p className="muted small">Enter the operator token configured on the server. It stays in this browser tab only.</p>
+          <form className="stack" onSubmit={e => { e.preventDefault(); setToken(tokenInput.trim()); setTokenInput(''); void load(); }}>
+            <label className="rr-field"><span>Workspace token</span><input className="rr-input" type="password" aria-label="Workspace token" autoComplete="current-password" required value={tokenInput} onChange={e => setTokenInput(e.target.value)}/></label>
+            {loginError && <p className="xs" style={{ color: 'var(--coral-ink)', margin: 0 }}>{loginError}</p>}
+            <button className="rr-btn rr-btn--primary rr-btn--lg rr-btn--block">Connect workspace</button>
+          </form>
+        </section> : loading ? <div className="loading"><LoaderCircle className="i spin"/>Loading your workspace…</div>
+          : page === 'ask' ? <AskPage ask={(question, caseId) => api('/ask', { question, case_id: caseId })}/> : <Shell/>}
       </main>
     </div>
-        {reportOpen && active && <ReportModal data={active} onClose={() => setReportOpen(false)}/>}
-    {toast && <div className="toast" role="status"><Check size={16}/>{toast}</div>}
-    {newOpen && <div className="modal-backdrop" onClick={() => setNewOpen(false)}><section className="modal" role="dialog" aria-modal="true" aria-labelledby="new-title" onClick={e => e.stopPropagation()}><div className="panel-heading"><h2 id="new-title">Report a disruption</h2><button className="icon-button" aria-label="Close dialog" onClick={() => setNewOpen(false)}><X/></button></div><p>Give your recovery team the context and constraints.</p><form onSubmit={create}><label>Case title<input name="title" autoFocus required minLength={3} maxLength={120} defaultValue="Network adapters delayed"/></label><div className="form-row"><label>Required item<input name="item" required defaultValue="USB-C network adapter" maxLength={100}/></label><label>Quantity<input name="quantity" type="number" min={1} max={10000} required defaultValue={20}/></label></div><label>Delivery location<input name="location" required defaultValue="Islamabad · Engineering lab" maxLength={120}/></label><label>What happened?<textarea name="disruption" required minLength={10} maxLength={2000} defaultValue="Original shipment delayed by 7 days. Lab installation must proceed within 3 days."/></label><div className="form-row"><label>Budget (PKR)<input name="budget" type="number" min={1} max={100000000} required defaultValue={180000}/></label><label>Maximum lead time (days)<input name="deadline" type="number" min={1} max={90} required defaultValue={3}/></label></div><button className="primary full" disabled={busy}>{busy ? <LoaderCircle className="spin" size={16}/> : <Plus size={16}/>}Create recovery case</button></form></section></div>}
-    {help && <div className="modal-backdrop" onClick={() => setHelp(false)}><section className="modal help-modal" role="dialog" aria-modal="true" aria-labelledby="help-title" onClick={e => e.stopPropagation()}><div className="panel-heading"><h2 id="help-title">A clear path to recovery.</h2><button className="icon-button" aria-label="Close help" onClick={() => setHelp(false)}><X/></button></div><ol><li><strong>Investigate</strong><p>Retrieve supplier evidence and identify feasible alternatives.</p></li><li><strong>Guide the plan</strong><p>Reject a supplier, require certification, change a deadline or adjust a budget. Add your reasoning and replan; the decision history keeps the record.</p></li><li><strong>Approve a specific version</strong><p>The server binds your approval to the selected supplier and total.</p></li><li><strong>Execute and verify</strong><p>Supplier conditions are re-checked first. If they changed, your approval is revoked and the agents re-plan. Otherwise a draft request is created, read back, and optionally dispatched through fastn. Delivery and payment are outside this workflow.</p></li></ol><button className="primary full" onClick={() => setHelp(false)}>Back to workspace <ArrowRight size={16}/></button></section></div>}
-  </div>;
+    {modal && <div className="scrim rr" onClick={() => setModal(null)}><div className="modal" role="dialog" aria-modal="true" aria-label={modal === 'report' ? 'Recovery report' : modal === 'help' ? 'How ReRoute works' : 'Report disruption'} onClick={e => e.stopPropagation()}>
+      {modal === 'report-disruption' && <ReportForm radar={radar} busy={!!busy.create} onClose={() => setModal(null)} onSubmit={v => void createDisruption(v)}/>}
+      {modal === 'report' && active && <ReportView c={active} onClose={() => setModal(null)} onCopy={() => copySummary(active)}/>}
+      {modal === 'help' && <>
+        <div className="modal__top"><div><div className="rr-eyebrow">About</div><h2 style={{ marginTop: 6 }}>How ReRoute works</h2></div><button className="rr-iconbtn" onClick={() => setModal(null)} aria-label="Close"><Ic as={X}/></button></div>
+        <ol className="help-steps">
+          <li><b>Spot the risk.</b> Risk radar scores every open order by days late ÷ days until needed, plus country signals. The AI analyst ranks what to act on.</li>
+          <li><b>Investigate.</b> Your agents pull supplier quotes, check every constraint in code, and inspect the evidence.</li>
+          <li><b>Direct the plan.</b> Reject a supplier, change the budget or deadline, add your reasoning, and replan. Every decision is recorded.</li>
+          <li><b>Approve and verify.</b> Approval binds one plan version. Supplier conditions are re-checked first; if they changed, nothing is created and your agents re-plan. Otherwise a draft request is created and read back.</li>
+        </ol>
+        <p className="small muted" style={{ margin: 0 }}>{config?.agent_mode === 'demo' ? 'Demo mode: planning uses explicit rules and supplier data is synthetic.' : `Live mode: ${config?.agent_mode === 'groq' ? 'Groq' : 'Claude'} (${config?.model}) powers the agents. Supplier data is ${config?.tool_mode === 'demo' ? 'synthetic' : 'connected'}.`} No payment is ever sent.</p>
+      </>}
+    </div></div>}
+    <div className="toasts rr" aria-live="polite">{toasts.map(t => <div key={t.id} className="toast" role="status"><Ic as={Check} sm/>{t.text}</div>)}</div>
+  </AppCtx.Provider>;
 }
-
-function Metric({ icon, label, value, foot }: { icon: React.ReactNode; label: string; value: string; foot: string }) { return <div className="metric"><div className="metric-top"><span>{label}</span><span className="metric-icon">{icon}</span></div><div className="metric-value">{value}<span className="metric-rule"/></div><p>{foot}</p></div>; }
-function Empty({ title, text, action, label, busy }: { title: string; text: string; action: () => void; label: string; busy?: boolean }) { return <div className="empty-state"><div className="route-illustration"><span><Package size={23}/></span><i/><span className="route-middle"><GitBranch size={27}/></span><i/><span><MapPin size={23}/></span></div><h3>{title}</h3><p>{text}</p><button className="primary" onClick={action} disabled={busy}>{busy ? <LoaderCircle size={16} className="spin"/> : <Sparkles size={16}/>} {busy ? 'Investigating…' : label}</button></div>; }
-function Timeline({ data }: { data: RecoveryCase }) { return <div className="timeline">{[...data.events].reverse().map(e => <div className={`timeline-event ${e.kind}`} key={e.id}><span className="timeline-marker">{e.kind === 'success' ? <Check size={12}/> : e.actor === 'Human reviewer' ? <ShieldCheck size={12}/> : <GitBranch size={12}/>}</span><div><div className="event-title"><strong>{e.title}</strong><time>{new Date(e.at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</time></div><p>{e.detail}</p><small>{e.actor}</small></div></div>)}</div>; }
-function Connection({ name, icon, state, text }: { name: string; icon: React.ReactNode; state: string; text: string }) { return <div className="panel connection"><span className="connection-icon">{icon}</span><h3>{name}</h3><span className="badge neutral">{state}</span><p>{text}</p></div>; }
 
 createRoot(document.getElementById('root')!).render(<React.StrictMode><App/></React.StrictMode>);

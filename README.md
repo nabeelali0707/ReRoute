@@ -50,15 +50,12 @@ The default persistent database is `data/reroute.db` (ignored by Git). PostgreSQ
 
 ## Demo walkthrough
 
-0. The app opens on **Risk radar**. Point out the risk matrix and the High orders, click **Run AI risk analysis**, then **Start recovery** on PO-2401 (or any High order).
-1. Open **Network adapters delayed** (or the case you just started) and **Start investigation**. Atlas is the cheapest feasible option.
-2. Click **Reject** on Atlas, type why ("Atlas failed our last two compatibility audits"), and **Revise & replan**. Northstar becomes the recommendation; **How this plan evolved** records the redirection.
-3. **Approve recovery plan**.
-4. Open **Demo scenario controls → Withdraw recommended supplier**, then **Execute approved plan**. The execution guard catches the withdrawal, revokes the approval before anything is created, and the agents re-plan: Crescent Tech Traders is now recommended.
-5. Approve Crescent and execute. The destination read-back verifies a PKR 160,000 draft request (and, with dispatch configured, the team is notified through fastn).
-6. Inspect **Source evidence**, the activity log, or export the case. Refresh the browser to confirm persistence.
-
-Shorter path: tick **Require certified compatibility** instead of rejecting Atlas; Northstar wins and executes at PKR 145,800.
+1. The app opens on **Risk radar**: risk matrix, country risk map and orders grouped by risk. Click **Run AI risk analysis**, click China on the map, then **Start recovery** on PO-2401.
+2. **Run investigation.** Your agents pull quotes, check constraints in code and recommend a plan.
+3. Click **Reject** on the recommended supplier, type your reason under *Instructions for your agents*, and **Revise & replan**. *How this plan evolved* records the redirection.
+4. Open **Demo scenario controls → Withdraw** the new recommendation, then **Approve plan**. The execution guard re-checks the supplier, revokes the approval before anything is created, and your agents re-plan automatically.
+5. **Approve plan** again. A draft request is created and read back: *Recovery request verified.*
+6. Show **Agent flow**, **Ask ReRoute** ("Why was this plan recommended?") and the **Recovery report**.
 
 ## Connect Claude and fastn
 

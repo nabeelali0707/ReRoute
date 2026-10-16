@@ -27,7 +27,8 @@ logging.basicConfig(level=logging.INFO, format='%(levelname)s:     %(name)s %(me
 
 def create_case(body, source_po=None):
     identifier = 'RR-' + uuid.uuid4().hex[:6].upper()
-    d = dict(id=identifier, **body.model_dump(), status='open', version=0, plans=[], suppliers=[], events=[], approval=None, execution=None, created_at=now(), updated_at=now(), review_note='', withdrawn_suppliers=[], decisions=[], dispatch=None, alert=None, source_po=source_po)
+    source_po = source_po or body.source_po
+    d = dict(id=identifier, **body.model_dump(exclude={'source_po'}), status='open', version=0, plans=[], suppliers=[], events=[], approval=None, execution=None, created_at=now(), updated_at=now(), review_note='', withdrawn_suppliers=[], decisions=[], dispatch=None, alert=None, source_po=source_po)
     event(d, 'Risk Radar' if source_po else 'Operations', 'Disruption reported', body.disruption, 'warning')
     with Session.begin() as session:
         session.add(Case(id=identifier, payload=d))
@@ -226,6 +227,8 @@ def list_cases():
 
 @app.post('/api/cases', status_code=201, dependencies=[Depends(authorize)])
 def new_case(body: NewCase):
+    if body.source_po and body.source_po not in {o['id'] for o in radar.ORDERS}:
+        raise HTTPException(422, 'Unknown purchase order.')
     return create_case(body)
 
 

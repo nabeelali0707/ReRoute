@@ -21,6 +21,8 @@ class NewCase(StrictModel):
     location: str = Field(default='Islamabad · Engineering lab', min_length=2, max_length=120)
     disruption: str = Field(default='Original shipment delayed by 7 days. Lab installation is scheduled in 3 days.', min_length=10, max_length=2000)
     constraints: Constraints = Field(default_factory=Constraints)
+    # Optional Risk Radar order this disruption affects (links the case to the order book).
+    source_po: str | None = Field(default=None, max_length=20)
 
 
 class Decision(StrictModel):

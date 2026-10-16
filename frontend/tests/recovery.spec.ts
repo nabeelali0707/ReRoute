@@ -1,136 +1,121 @@
-import { test, expect } from '@playwright/test';
+import { test, expect, type Page } from '@playwright/test';
 
-test('operator changes constraints, approves and verifies a request', async ({ page, request }) => {
-  const errors: string[] = [];
-  page.on('pageerror', e => errors.push(e.message));
-  const seed = await request.post('/api/cases', { data: { title: `Browser recovery ${Date.now()}` } });
-  const created = await seed.json();
-  await page.goto('/');
-  await page.getByRole('button', { name: /^Recovery( \d+)?$/ }).click();
-  await page.getByRole('button', { name: new RegExp(created.title) }).click();
-  await page.getByRole('button', { name: 'Start investigation', exact: true }).click();
-  await expect(page.getByRole('radio', { name: 'Select Atlas Components' })).toBeChecked();
-  await page.getByRole('checkbox', { name: /Require certified compatibility/ }).check();
-  await page.getByRole('textbox', { name: 'Instructions for your agents' }).fill('This lab requires certified components. Exclude unverified substitutes.');
-  await page.getByRole('button', { name: 'Revise & replan' }).click();
-  await expect(page.getByRole('radio', { name: 'Select Northstar Industrial' })).toBeChecked();
-  await expect(page.getByRole('radio', { name: 'Select Atlas Components' })).toBeDisabled();
-  await page.screenshot({ path: 'test-results/desktop-review.png', fullPage: true });
-  await page.getByRole('button', { name: 'Approve recovery plan' }).click();
-  await page.getByRole('button', { name: 'Execute approved plan' }).click();
-  await expect(page.getByRole('heading', { name: 'Recovery request verified.' })).toBeVisible();
-  await page.reload();
-  await page.getByRole('button', { name: /^Recovery( \d+)?$/ }).click();
-  await page.getByRole('button', { name: new RegExp(created.title) }).click();
-  await expect(page.getByRole('heading', { name: 'Recovery request verified.' })).toBeVisible();
-  await page.getByRole('button', { name: 'Source evidence', exact: true }).click();
-  await expect(page.getByText('QT-1042', { exact: true })).toBeVisible();
-  await page.getByRole('button', { name: 'Connections', exact: true }).click();
-  await expect(page.getByText('Local demo adapter', { exact: true })).toBeVisible();
-  await page.getByRole('button', { name: 'Run connection check' }).click();
-  await expect(page.getByRole('list', { name: 'Connection check results' }).getByText('Demo mode')).toBeVisible();
-  expect(errors).toEqual([]);
-});
+const watchErrors = (page: Page) => { const errors: string[] = []; page.on('pageerror', e => errors.push(e.message)); return errors; };
+async function openCase(page: Page, title: string) {
+  await page.goto('/#recovery');
+  await page.getByRole('listitem').filter({ hasText: title }).click();
+  await expect(page.getByRole('heading', { name: title, level: 2 })).toBeVisible();
+}
 
-test('reviewer rejects a supplier, then a withdrawal triggers automatic re-planning', async ({ page, request }) => {
-  const errors: string[] = [];
-  page.on('pageerror', e => errors.push(e.message));
-  const created = await (await request.post('/api/cases', { data: { title: `Rejection flow ${Date.now()}` } })).json();
-  await page.goto('/');
-  await page.getByRole('button', { name: /^Recovery( \d+)?$/ }).click();
-  await page.getByRole('button', { name: new RegExp(created.title) }).click();
-  await page.getByRole('button', { name: 'Start investigation', exact: true }).click();
-  await expect(page.getByRole('radio', { name: 'Select Atlas Components' })).toBeChecked();
+test('reject, replan, withdrawal guard, automatic re-plan and verified request', async ({ page, request }) => {
+  const errors = watchErrors(page);
+  const created = await (await request.post('/api/cases', { data: { title: `Adapters ${Date.now()}` } })).json();
+  await openCase(page, created.title);
+  await page.getByRole('button', { name: 'Run investigation' }).click();
+  await expect(page.getByRole('radio', { name: 'Choose Atlas Components' })).toBeChecked();
+
+  // Human redirects the plan: reject the cheapest supplier with a reason.
   await page.getByRole('button', { name: 'Reject Atlas Components' }).click();
-  await expect(page.getByText('Rejection pending — replan to apply')).toBeVisible();
-  await expect(page.getByRole('button', { name: 'Approve recovery plan' })).toBeDisabled();
+  await expect(page.getByText('Rejection pending')).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Approve plan' })).toBeDisabled();
   await page.getByRole('textbox', { name: 'Instructions for your agents' }).fill('Atlas failed our last two compatibility audits.');
   await page.getByRole('button', { name: 'Revise & replan' }).click();
-  await expect(page.getByRole('radio', { name: 'Select Northstar Industrial' })).toBeChecked();
-  const history = page.getByRole('region', { name: 'Decision history' });
-  await expect(history.getByText('Atlas Components')).toBeVisible();
-  await page.getByRole('button', { name: 'Approve recovery plan' }).click();
-  await expect(page.getByRole('button', { name: 'Execute approved plan' })).toBeVisible();
-  // Northstar withdraws after approval; execution must catch it and re-plan.
+  await expect(page.getByRole('radio', { name: 'Choose Northstar Industrial' })).toBeChecked();
+  await expect(page.getByRole('region', { name: 'How this plan evolved' })).toContainText('Atlas failed our last two compatibility audits.');
+
+  // Supplier withdraws before approval: the execution guard must catch it and re-plan.
   await page.getByText('Demo scenario controls').click();
-  await page.getByRole('button', { name: 'Withdraw recommended supplier' }).click();
-  await expect(page.getByText('Synthetic withdrawal recorded.')).toBeVisible();
-  await page.getByRole('button', { name: 'Execute approved plan' }).click();
+  await page.getByRole('button', { name: 'Withdraw Northstar Industrial' }).click();
+  await page.getByRole('button', { name: 'Approve plan' }).click();
   await expect(page.getByText('Northstar Industrial can no longer fulfil this plan')).toBeVisible();
-  await expect(history.getByText(/Invalidated/)).toBeVisible();
-  await expect(page.getByRole('heading', { name: 'Recovery request verified.' })).toHaveCount(0);
-  await expect(page.getByRole('radio', { name: 'Select Crescent Tech Traders' })).toBeChecked();
-  await page.screenshot({ path: 'test-results/replan-alert.png', fullPage: true });
-  await page.getByRole('button', { name: 'Approve recovery plan' }).click();
-  await page.getByRole('button', { name: 'Execute approved plan' }).click();
-  await expect(page.getByRole('heading', { name: 'Recovery request verified.' })).toBeVisible();
-  await expect(page.getByText(/PKR 160,000/).first()).toBeVisible();
+  await expect(page.getByRole('radio', { name: 'Choose Crescent Tech Traders' })).toBeChecked();
+  await expect(page.getByRole('region', { name: 'How this plan evolved' })).toContainText('Invalidated');
+
+  await page.getByRole('button', { name: 'Approve plan' }).click();
+  await expect(page.getByText('Recovery request verified.')).toBeVisible();
+  await expect(page.getByText(/PKR 160,000 · Saved as a draft/)).toBeVisible();
+  await page.screenshot({ path: 'test-results/recovery-verified.png', fullPage: true });
+
+  // Persistence, report and evidence.
+  await page.reload();
+  await page.getByRole('listitem').filter({ hasText: created.title }).click();
+  await expect(page.getByText('Recovery request verified.')).toBeVisible();
+  await page.getByRole('tab', { name: /Source evidence/ }).click();
+  await expect(page.getByText('QT-1045', { exact: true })).toBeVisible();
+  await page.getByRole('button', { name: 'Recovery report' }).click();
+  const report = page.getByRole('dialog', { name: 'Recovery report' });
+  await expect(report).toContainText('Options compared');
+  await expect(report).toContainText('Invalidated');
+  await report.getByRole('button', { name: 'Close report' }).click();
   expect(errors).toEqual([]);
 });
 
-test('mobile layout and case creation are usable', async ({ page }) => {
-  await page.setViewportSize({ width: 390, height: 844 });
-  await page.goto('/');
-  await page.getByRole('button', { name: 'Report disruption', exact: true }).click();
-  await page.getByRole('textbox', { name: 'Case title', exact: true }).fill('Mobile supplier disruption');
-  await page.getByRole('button', { name: 'Create recovery case' }).click();
-  await expect(page.getByRole('heading', { name: 'Mobile supplier disruption', exact: true })).toBeVisible();
-  const overflow = await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth);
-  expect(overflow).toBe(false);
-  await page.screenshot({ path: 'test-results/mobile-workspace.png', fullPage: true });
-});
-
-test('risk radar flags orders, opens a recovery case, answers questions and prints a report', async ({ page }) => {
-  const errors: string[] = [];
-  page.on('pageerror', e => errors.push(e.message));
+test('risk radar: analyst, map, start recovery, ask and report disruption', async ({ page }) => {
+  const errors = watchErrors(page);
   await page.goto('/');
   await expect(page.getByRole('heading', { name: 'See trouble before it arrives.' })).toBeVisible();
-  const table = page.getByRole('table', { name: 'Order risk table' });
-  await expect(table.getByRole('row', { name: /PO-2401/ }).getByText('High')).toBeVisible();
-  await expect(page.getByRole('img', { name: /Risk matrix/ })).toBeVisible();
-  await page.getByRole('button', { name: /Refresh rule-based analysis|Run AI risk analysis/ }).click();
-  await expect(page.locator('.priority-list').getByText('PO-2401')).toBeVisible();
-  await page.screenshot({ path: 'test-results/risk-radar.png', fullPage: true });
-  await page.getByRole('button', { name: /(Start recovery|Open case) for PO-2402|Open RR-.* for PO-2402/ }).first().click();
-  await expect(page.getByRole('heading', { name: /Temperature sensor at risk \(PO-2402\)/ })).toBeVisible();
-  // Reopening a flagged order returns its existing case, which may already be investigated.
-  const start = page.getByRole('button', { name: 'Start investigation', exact: true });
-  if (await start.isVisible()) await start.click();
-  await expect(page.getByRole('radio', { name: /Select / }).first()).toBeVisible();
-  await page.getByRole('button', { name: 'Ask ReRoute' }).click();
+  await expect(page.getByRole('table', { name: 'High risk orders' }).getByRole('row', { name: /PO-2401/ })).toBeVisible();
+  await page.getByRole('button', { name: /Run AI risk analysis|Refresh rule-based analysis/ }).click();
+  await expect(page.getByRole('region', { name: 'AI risk analyst' }).locator('.priority').first()).toContainText('PO-2401');
+  await page.locator('.map path[aria-label="China"]').click();
+  await expect(page.locator('.country-card')).toContainText('SIG-11');
+  await page.screenshot({ path: 'test-results/radar.png', fullPage: true });
+
+  await page.getByRole('button', { name: /(Start recovery|Open RR-\w+) for PO-2402/ }).click();
+  await expect(page.getByRole('heading', { name: /Temperature sensor at risk \(PO-2402\)/, level: 2 })).toBeVisible();
+  const run = page.getByRole('button', { name: 'Run investigation' });
+  if (await run.isVisible()) await run.click();
+  await expect(page.getByRole('radio').first()).toBeVisible();
+
+  await page.getByRole('link', { name: 'Ask ReRoute' }).click();
   await page.getByRole('textbox', { name: 'Message ReRoute' }).fill('Which orders are at risk?');
-  await page.getByRole('button', { name: 'Send message' }).click();
-  await expect(page.locator('.bubble-row.assistant .bubble-text').last()).toContainText('PO-2401');
-  await expect(page.locator('.mini-order').first()).toBeVisible();
-  await page.screenshot({ path: 'test-results/chat-page.png', fullPage: true });
-  await page.getByRole('button', { name: /^Recovery( \d+)?$/ }).click();
-  await page.getByRole('button', { name: 'Recovery report' }).click();
-  await expect(page.locator('.report-print').getByRole('heading', { name: /Temperature sensor at risk/, level: 2 })).toBeVisible();
-  await expect(page.locator('.report-print')).toContainText('Options compared');
-  await page.screenshot({ path: 'test-results/recovery-report.png' });
+  await page.getByRole('button', { name: 'Send', exact: true }).click();
+  await expect(page.locator('.msg:not(.msg--me) .bubble').last()).toContainText('PO-2401');
+  await expect(page.getByRole('button', { name: /PO-2401/ }).first()).toBeVisible();
+  await page.screenshot({ path: 'test-results/ask.png', fullPage: true });
+
+  await page.getByRole('button', { name: 'Report disruption' }).click();
+  const form = page.getByRole('dialog', { name: 'Report disruption' });
+  await form.getByRole('combobox').selectOption('PO-2407');
+  await form.getByRole('textbox', { name: 'Title' }).fill('PLC modules held at Pune');
+  await form.getByRole('button', { name: 'Report disruption' }).click();
+  await expect(page.getByRole('heading', { name: 'PLC modules held at Pune', level: 2 })).toBeVisible();
+  await expect(page.getByText('Needs investigation.')).toBeVisible();
   expect(errors).toEqual([]);
 });
 
-test('dark mode, agent flow and country map', async ({ page, request }) => {
-  const errors: string[] = [];
-  page.on('pageerror', e => errors.push(e.message));
-  const created = await (await request.post('/api/cases', { data: { title: `Flow view ${Date.now()}` } })).json();
+test('agent flow, suppliers and connections', async ({ page, request }) => {
+  const errors = watchErrors(page);
+  const created = await (await request.post('/api/cases', { data: { title: `Flow ${Date.now()}` } })).json();
   await request.post(`/api/cases/${created.id}/investigate`);
-  await page.goto('/');
-  await page.locator('.map-country.interactive[aria-label^="China"]').click();
-  await expect(page.locator('.map-detail')).toContainText('SIG-11');
-  await page.getByRole('button', { name: 'Switch to dark mode' }).click();
-  await expect(page.locator('html')).toHaveAttribute('data-theme', 'dark');
-  await page.screenshot({ path: 'test-results/dark-radar.png', fullPage: true });
-  await page.getByRole('button', { name: /^Recovery( \d+)?$/ }).click();
-  await page.getByRole('button', { name: new RegExp(created.title) }).click();
-  await page.getByRole('button', { name: 'Agent flow' }).click();
+  await page.goto('/#flow');
+  await page.getByRole('listitem').filter({ hasText: created.title }).click();
   const flow = page.getByRole('region', { name: 'Agent flow' });
-  await expect(flow.getByText('Sourcing agent')).toBeVisible();
+  await expect(flow.getByText('Sourcing agent', { exact: true })).toBeVisible();
   await flow.getByRole('button', { name: 'Show output' }).nth(2).click();
-  await expect(flow.locator('.stage-output-body').first()).toBeVisible();
-  await page.screenshot({ path: 'test-results/agent-flow-dark.png', fullPage: true });
-  await page.getByRole('button', { name: 'Switch to light mode' }).click();
-  await expect(page.locator('html')).toHaveAttribute('data-theme', 'light');
+  await expect(flow.locator('.output')).toBeVisible();
+  await page.screenshot({ path: 'test-results/flow.png', fullPage: true });
+
+  await page.getByRole('link', { name: 'Suppliers' }).click();
+  await expect(page.getByText('Crescent Tech Traders').first()).toBeVisible();
+  await page.getByRole('tab', { name: 'List' }).click();
+  await expect(page.getByRole('table')).toContainText('QT-1045');
+
+  await page.getByRole('link', { name: 'Connections' }).click();
+  await page.getByRole('button', { name: 'Run connection check' }).click();
+  await expect(page.getByLabel('Connection check results')).toContainText('Demo mode');
+  await page.getByRole('button', { name: 'How ReRoute works' }).click();
+  await expect(page.getByRole('dialog', { name: 'How ReRoute works' })).toContainText('Approve and verify');
   expect(errors).toEqual([]);
+});
+
+test('mobile layout has no horizontal overflow', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  for (const hash of ['radar', 'recovery', 'ask']) {
+    await page.goto(`/#${hash}`);
+    await page.locator('h1').waitFor();
+    expect(await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth)).toBe(false);
+  }
+  await page.goto('/');
+  await page.screenshot({ path: 'test-results/mobile.png', fullPage: true });
 });

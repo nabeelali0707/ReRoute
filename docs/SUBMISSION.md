@@ -58,19 +58,17 @@ Material for the one-PDF submission (handbook pages 9–11), plus demo and video
 
 ## Six-minute finalist demo
 
-With the live AI, the first recommendation can be Atlas or Northstar; it weighs certification differently on each run. Whichever it recommends, **reject that supplier** with a reason. The re-plan, approval, withdrawal and automatic re-plan steps work the same way.
+With the live AI, the first recommendation can differ between runs. Whichever supplier it recommends, reject that one with a reason.
 
 | Time | Show | Say (in your own words) |
 |---|---|---|
-| 0:00–0:50 | **Risk radar** (first screen): risk matrix, High orders, **Run AI risk analysis** | Agents watch every open order; schedule risk = days late ÷ days until needed, plus country signals. The AI analyst ranks what to act on, citing signal IDs; you decide. |
-| 0:50–1:00 | **Start recovery** on PO-2401 | One click turns a flagged order into a recovery case: 20 adapters, 3-day deadline, original shipment 7 days late. |
-| 0:40–1:30 | **Start investigation**; open the Activity tab | Agents retrieved supplier quotes, checked every constraint in code, and the sourcing agent inspected the evidence. |
-| 1:30–2:20 | Options table and **Source evidence** | Atlas is cheapest but has no certification evidence; each option links to its quote. |
-| 2:20–3:10 | **Reject** Atlas, type the reason, **Revise & replan** | Human knowledge redirects the plan; Northstar is now recommended; "How this plan evolved" records why. |
-| 3:10–3:40 | **Approve recovery plan** | Approval is bound to this exact plan version and total. |
-| 3:40–4:40 | **Demo scenario controls → Withdraw**, then **Execute** | Re-check catches the change, the approval is revoked before anything is created, and agents re-plan to Crescent. |
-| 4:40–5:30 | Approve Crescent → **Execute** | Draft request created and read back (PKR 160,000); team notified through fastn. Show the Slack message or sheet row. |
-| 5:30–6:00 | **Ask ReRoute** ("Why was this plan chosen?") and **Recovery report** | The AI explains with quote IDs but cannot act; the report captures every human decision for stakeholders. |
+| 0:00–0:50 | **Risk radar**: matrix, country map (click China), **Run AI risk analysis** | Agents watch every open order; schedule risk = days late ÷ days until needed, plus country signals. The AI analyst ranks what to act on; you decide. |
+| 0:50–1:40 | **Start recovery** on PO-2401 → **Run investigation** | One click turns a flagged order into a case. Agents pull quotes, check every constraint in code, and the sourcing agent inspects the evidence. |
+| 1:40–2:40 | **Reject** the recommended supplier, type the reason, **Revise & replan** | Human knowledge redirects the plan; *How this plan evolved* records why. |
+| 2:40–3:50 | **Demo scenario controls → Withdraw** the new pick, then **Approve plan** | The execution guard re-checks before acting, revokes the approval, creates nothing, and the agents re-plan automatically. |
+| 3:50–4:40 | **Approve plan** again | Draft request created and read back: *Recovery request verified.* |
+| 4:40–5:30 | **Agent flow** (Show output) and **Ask ReRoute** ("Why was this plan recommended?") | Every agent step is traceable; the AI explains with quote IDs but cannot act. |
+| 5:30–6:00 | **Recovery report** | Every human decision captured for stakeholders. |
 
 ## Two–three minute video outline
 
